@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Advanced Media Player</title>
+    <style>
+      body {
+        background-color: #000;
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+        padding: 20px;
+        color: #fff;
+      }
+
+      .media-container {
+        max-width: 100%;
+        width: 720px;
+        background: #111;
+        padding: 20px;
+        border-radius: 16px;
+        box-shadow: 0 4px 12px rgba(255, 255, 255, 0.1);
+      }
+
+      video,
+      audio {
+        width: 100%;
+        border-radius: 8px;
+        background-color: #000;
+      }
+
+      #waveform {
+        width: 100%;
+        height: 100px;
+        margin-top: 0;
+        background: #111;
+        display: block;
+        cursor: pointer;
+      }
+
+      input[type="file"],
+      .controls {
+        margin-top: 20px;
+        width: 100%;
+      }
+
+      .controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 10px;
+      }
+
+      .controls label {
+        margin-right: 10px;
+        white-space: nowrap;
+      }
+
+      .controls input[type="number"] {
+        width: 100px;
+        padding: 5px;
+        font-size: 16px;
+        background: #222;
+        color: #fff;
+        border: 1px solid #555;
+        border-radius: 6px;
+      }
+
+      input[type="file"] {
+        background: #222;
+        color: #fff;
+        border: 1px solid #555;
+        padding: 5px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="media-container">
+      <video id="videoPlayer" controls></video>
+      <audio id="audioPlayer" controls hidden></audio>
+
+      <canvas id="waveform"></canvas>
+
+      <input type="file" id="fileInput" accept="video/*,audio/*" />
+
+      <div class="controls">
+        <label for="speedControl">Speed:</label>
+        <input
+          type="number"
+          id="speedControl"
+          min="0.1"
+          max="100"
+          step="0.1"
+          value="1.0"
+        />
+      </div>
+    </div>
+
+    <script>
+      const fileInput = document.getElementById("fileInput");
+      const videoPlayer = document.getElementById("videoPlayer");
+      const audioPlayer = document.getElementById("audioPlayer");
+      const speedControl = document.getElementById("speedControl");
+      const canvas = document.getElementById("waveform");
+      const ctx = canvas.getContext("2d");
+
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      // Ensure canvas drawing size matches its CSS size
+      function resizeCanvas() {
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width || 1;
+        canvas.height = rect.height || 1;
+      }
+
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+
+      // Draw a static waveform for the entire file (single channel)
+      function drawFullWaveform(audioBuffer) {
+        const sampleCount = canvas.width;
+        if (sampleCount <= 0) return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#111";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Use first channel only
+        const channelData = audioBuffer.getChannelData(0);
+        const blockSize = Math.max(
+          1,
+          Math.floor(channelData.length / sampleCount)
+        );
+        const waveform = new Float32Array(sampleCount);
+
+        // Calculate average amplitude for each pixel
+        for (let i = 0; i < sampleCount; i++) {
+          let sum = 0;
+          const start = i * blockSize;
+          const end = Math.min(start + blockSize, channelData.length);
+          for (let j = start; j < end; j++) {
+            sum += Math.abs(channelData[j]);
+          }
+          waveform[i] = sum / (end - start || 1);
+        }
+
+        // Draw waveform
+        ctx.lineWidth = 1;
+        ctx.fillStyle = "#4a9eff";
+
+        const midY = canvas.height / 2;
+        const halfHeight = canvas.height / 2;
+        const amplification = 7; // Make waves taller
+
+        for (let x = 0; x < waveform.length; x++) {
+          const v = waveform[x];
+          const barHeight = Math.min(
+            v * halfHeight * amplification,
+            halfHeight
+          );
+          ctx.fillRect(x, midY - barHeight, 1, barHeight * 2);
+        }
+      }
+
+      // Just load/play media; no realtime analyzer
+      function loadMedia(url, isAudio) {
+        if (isAudio) {
+          audioPlayer.src = url;
+          audioPlayer.hidden = false;
+          videoPlayer.hidden = true;
+          audioPlayer.load();
+          audioPlayer
+            .play()
+            .catch((err) =>
+              console.warn("Audio play blocked by browser:", err)
+            );
+        } else {
+          videoPlayer.src = url;
+          videoPlayer.hidden = false;
+          audioPlayer.hidden = true;
+          videoPlayer.load();
+          videoPlayer
+            .play()
+            .catch((err) =>
+              console.warn("Video play blocked by browser:", err)
+            );
+        }
+      }
+
+      fileInput.addEventListener("change", async function () {
+        const file = this.files[0];
+        if (!file) return;
+
+        const url = URL.createObjectURL(file);
+        const isAudio = file.type.startsWith("audio/");
+
+        // Load media element (video or audio)
+        loadMedia(url, isAudio);
+
+        // Decode entire file for static waveform
+        try {
+          if (audioCtx.state === "suspended") {
+            await audioCtx.resume();
+          }
+
+          const arrayBuffer = await file.arrayBuffer();
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          resizeCanvas(); // ensure correct size before drawing
+          drawFullWaveform(audioBuffer);
+        } catch (err) {
+          console.warn("Could not decode audio for waveform:", err);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+      });
+
+      // Speed control
+      speedControl.addEventListener("input", function () {
+        const val = parseFloat(this.value);
+        if (isNaN(val) || val <= 0) return;
+
+        if (!videoPlayer.hidden) videoPlayer.playbackRate = val;
+        if (!audioPlayer.hidden) audioPlayer.playbackRate = val;
+      });
+
+      // Click on waveform to seek
+      canvas.addEventListener("click", function (e) {
+        const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+        if (!player.duration) return; // No media loaded yet
+
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const percentage = x / rect.width;
+        const newTime = percentage * player.duration;
+
+        player.currentTime = Math.max(0, Math.min(newTime, player.duration));
+      });
+
+      // Keyboard shortcuts
+      window.addEventListener("keydown", function (e) {
+        const tag = document.activeElement.tagName.toLowerCase();
+        if (tag === "input") return;
+
+        const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+
+        switch (e.key) {
+          case "d":
+          case "D":
+            e.preventDefault();
+            player.playbackRate = Math.min(player.playbackRate + 0.1, 100);
+            break;
+          case "s":
+          case "S":
+            e.preventDefault();
+            player.playbackRate = Math.max(player.playbackRate - 0.1, 0.1);
+            break;
+          case "ArrowRight":
+            e.preventDefault();
+            player.currentTime = Math.min(
+              player.currentTime + 2,
+              player.duration || player.currentTime + 2
+            );
+            break;
+          case "ArrowLeft":
+            e.preventDefault();
+            player.currentTime = Math.max(player.currentTime - 2, 0);
+            break;
+          case " ":
+          case "Spacebar":
+            e.preventDefault();
+            if (player.paused) player.play();
+            else player.pause();
+            break;
+          default:
+            return;
+        }
+
+        try {
+          speedControl.value = player.playbackRate.toFixed(1);
+        } catch (err) {
+          console.warn(
+            "Cannot update speed indicator: video controller UI not fully initialized"
+          );
+        }
+      });
+    </script>
+  </body>
+</html>
