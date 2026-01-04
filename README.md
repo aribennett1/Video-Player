@@ -22,6 +22,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 ### 📊 Waveform Visualization
 
 - **Full-Length Waveform**: Visual representation of the entire audio track
+- **Progress Overlay**: Real-time visual indicator showing current playback position on the waveform
 - **Interactive Seeking**: Click anywhere on the waveform to jump to that timestamp
 - **Auto-Generated**: Automatically creates waveform for any loaded media file
 - Works for both video (audio track) and audio files
@@ -41,6 +42,14 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 - **Clean Layout**: Minimalist interface focusing on functionality
 - **Visual Feedback**: Blue waveform bars for clear visualization
 
+### 📋 Queue System
+
+- **Multiple File Selection**: Select multiple audio/video files at once
+- **Sequential Playback**: Automatically plays the next file when the current one ends
+- **Queue Management**: View all queued files with visual indicator of currently playing item
+- **Remove from Queue**: Remove any file from the queue with a single click
+- **Dynamic Queue**: Add more files to the queue at any time without interrupting playback
+
 ## Usage
 
 ### Getting Started
@@ -53,8 +62,17 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 ### Loading Media
 
 - Click the file input button at the top of the player
-- Select any audio or video file from your computer
+- Select one or multiple audio/video files from your computer (hold Ctrl/Cmd or Shift to select multiple)
+- Files will be added to the queue and playback will start automatically
 - Supported formats depend on your browser (common formats like MP4, MP3, WAV, etc.)
+
+### Managing the Queue
+
+- **View Queue**: All queued files are displayed below the controls
+- **Current Item**: The currently playing file is highlighted in blue
+- **Remove Items**: Click the "Remove" button next to any file to remove it from the queue
+- **Add More Files**: Select additional files at any time to add them to the queue
+- **Auto-Play**: When a file finishes, the next one in the queue automatically starts
 
 ### Controlling Playback
 

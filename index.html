@@ -34,13 +34,27 @@
         background-color: #000;
       }
 
+      .waveform-container {
+        position: relative;
+        width: 100%;
+        margin-top: 0;
+      }
+
       #waveform {
         width: 100%;
         height: 100px;
-        margin-top: 0;
         background: #111;
         display: block;
         cursor: pointer;
+      }
+
+      #progressOverlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100px;
+        pointer-events: none;
       }
 
       input[type="file"],
@@ -78,6 +92,75 @@
         padding: 5px;
         border-radius: 6px;
       }
+
+      .queue-container {
+        margin-top: 20px;
+        background: #222;
+        border-radius: 8px;
+        padding: 15px;
+      }
+
+      .queue-container h3 {
+        margin: 0 0 10px 0;
+        font-size: 16px;
+        color: #4a9eff;
+      }
+
+      .queue-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+
+      .queue-item {
+        background: #333;
+        padding: 10px;
+        margin-bottom: 5px;
+        border-radius: 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .queue-item.playing {
+        background: #4a9eff;
+        color: #000;
+        font-weight: bold;
+      }
+
+      .queue-item-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        margin-right: 10px;
+      }
+
+      .queue-item button {
+        background: #555;
+        color: #fff;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .queue-item button:hover {
+        background: #777;
+      }
+
+      .queue-item.playing button {
+        background: #000;
+        color: #fff;
+      }
+
+      .queue-empty {
+        color: #777;
+        font-style: italic;
+        text-align: center;
+        padding: 20px;
+      }
     </style>
   </head>
   <body>
@@ -85,9 +168,12 @@
       <video id="videoPlayer" controls></video>
       <audio id="audioPlayer" controls hidden></audio>
 
-      <canvas id="waveform"></canvas>
+      <div class="waveform-container">
+        <canvas id="waveform"></canvas>
+        <canvas id="progressOverlay"></canvas>
+      </div>
 
-      <input type="file" id="fileInput" accept="video/*,audio/*" />
+      <input type="file" id="fileInput" accept="video/*,audio/*" multiple />
 
       <div class="controls">
         <label for="speedControl">Speed:</label>
@@ -100,6 +186,15 @@
           value="1.0"
         />
       </div>
+
+      <div class="queue-container">
+        <h3>Queue</h3>
+        <ul class="queue-list" id="queueList">
+          <li class="queue-empty">
+            No files in queue. Select multiple files to queue them.
+          </li>
+        </ul>
+      </div>
     </div>
 
     <script>
@@ -109,14 +204,29 @@
       const speedControl = document.getElementById("speedControl");
       const canvas = document.getElementById("waveform");
       const ctx = canvas.getContext("2d");
+      const progressCanvas = document.getElementById("progressOverlay");
+      const progressCtx = progressCanvas.getContext("2d");
+      const queueList = document.getElementById("queueList");
 
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      // Queue management
+      let mediaQueue = [];
+      let currentQueueIndex = -1;
+      let currentAudioBuffer = null;
 
       // Ensure canvas drawing size matches its CSS size
       function resizeCanvas() {
         const rect = canvas.getBoundingClientRect();
         canvas.width = rect.width || 1;
         canvas.height = rect.height || 1;
+        progressCanvas.width = rect.width || 1;
+        progressCanvas.height = rect.height || 1;
+
+        // Redraw waveform if we have audio buffer
+        if (currentAudioBuffer) {
+          drawFullWaveform(currentAudioBuffer);
+        }
       }
 
       window.addEventListener("resize", resizeCanvas);
@@ -124,6 +234,7 @@
 
       // Draw a static waveform for the entire file (single channel)
       function drawFullWaveform(audioBuffer) {
+        currentAudioBuffer = audioBuffer;
         const sampleCount = canvas.width;
         if (sampleCount <= 0) return;
 
@@ -168,6 +279,133 @@
         }
       }
 
+      // Draw progress overlay on waveform
+      function drawProgressOverlay() {
+        const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+        if (!player.duration || isNaN(player.duration)) {
+          requestAnimationFrame(drawProgressOverlay);
+          return;
+        }
+
+        progressCtx.clearRect(
+          0,
+          0,
+          progressCanvas.width,
+          progressCanvas.height
+        );
+
+        const progress = player.currentTime / player.duration;
+        const progressX = progress * progressCanvas.width;
+
+        // Draw semi-transparent overlay for played portion
+        progressCtx.fillStyle = "rgba(74, 158, 255, 0.3)";
+        progressCtx.fillRect(0, 0, progressX, progressCanvas.height);
+
+        // Draw progress line
+        progressCtx.fillStyle = "rgba(255, 255, 255, 0.8)";
+        progressCtx.fillRect(progressX - 1, 0, 2, progressCanvas.height);
+
+        requestAnimationFrame(drawProgressOverlay);
+      }
+
+      // Start progress overlay animation
+      drawProgressOverlay();
+
+      // Update queue display
+      function updateQueueDisplay() {
+        queueList.innerHTML = "";
+
+        if (mediaQueue.length === 0) {
+          queueList.innerHTML =
+            '<li class="queue-empty">No files in queue. Select multiple files to queue them.</li>';
+          return;
+        }
+
+        mediaQueue.forEach((item, index) => {
+          const li = document.createElement("li");
+          li.className =
+            "queue-item" + (index === currentQueueIndex ? " playing" : "");
+
+          const nameSpan = document.createElement("span");
+          nameSpan.className = "queue-item-name";
+          nameSpan.textContent = item.name;
+
+          const removeBtn = document.createElement("button");
+          removeBtn.textContent = "Remove";
+          removeBtn.onclick = () => removeFromQueue(index);
+
+          li.appendChild(nameSpan);
+          li.appendChild(removeBtn);
+          queueList.appendChild(li);
+        });
+      }
+
+      // Remove item from queue
+      function removeFromQueue(index) {
+        if (index === currentQueueIndex) {
+          // If removing currently playing item, play next
+          mediaQueue.splice(index, 1);
+          if (mediaQueue.length > 0) {
+            currentQueueIndex = Math.min(index, mediaQueue.length - 1);
+            playQueueItem(currentQueueIndex);
+          } else {
+            currentQueueIndex = -1;
+            // Clear players
+            videoPlayer.src = "";
+            audioPlayer.src = "";
+            currentAudioBuffer = null;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            progressCtx.clearRect(
+              0,
+              0,
+              progressCanvas.width,
+              progressCanvas.height
+            );
+          }
+        } else {
+          mediaQueue.splice(index, 1);
+          if (index < currentQueueIndex) {
+            currentQueueIndex--;
+          }
+        }
+        updateQueueDisplay();
+      }
+
+      // Play specific queue item
+      async function playQueueItem(index) {
+        if (index < 0 || index >= mediaQueue.length) return;
+
+        currentQueueIndex = index;
+        const item = mediaQueue[index];
+
+        updateQueueDisplay();
+
+        // Load media
+        loadMedia(item.url, item.isAudio);
+
+        // Decode for waveform
+        try {
+          if (audioCtx.state === "suspended") {
+            await audioCtx.resume();
+          }
+          const arrayBuffer = await item.file.arrayBuffer();
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          resizeCanvas();
+          drawFullWaveform(audioBuffer);
+        } catch (err) {
+          console.warn("Could not decode audio for waveform:", err);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          currentAudioBuffer = null;
+        }
+      }
+
+      // Play next in queue
+      function playNext() {
+        if (currentQueueIndex < mediaQueue.length - 1) {
+          playQueueItem(currentQueueIndex + 1);
+        }
+      }
+
       // Just load/play media; no realtime analyzer
       function loadMedia(url, isAudio) {
         if (isAudio) {
@@ -193,30 +431,35 @@
         }
       }
 
+      // Handle media ended event to play next in queue
+      videoPlayer.addEventListener("ended", playNext);
+      audioPlayer.addEventListener("ended", playNext);
+
       fileInput.addEventListener("change", async function () {
-        const file = this.files[0];
-        if (!file) return;
+        const files = Array.from(this.files);
+        if (files.length === 0) return;
 
-        const url = URL.createObjectURL(file);
-        const isAudio = file.type.startsWith("audio/");
+        // Add files to queue
+        files.forEach((file) => {
+          const url = URL.createObjectURL(file);
+          const isAudio = file.type.startsWith("audio/");
+          mediaQueue.push({
+            file: file,
+            url: url,
+            isAudio: isAudio,
+            name: file.name,
+          });
+        });
 
-        // Load media element (video or audio)
-        loadMedia(url, isAudio);
+        updateQueueDisplay();
 
-        // Decode entire file for static waveform
-        try {
-          if (audioCtx.state === "suspended") {
-            await audioCtx.resume();
-          }
-
-          const arrayBuffer = await file.arrayBuffer();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-          resizeCanvas(); // ensure correct size before drawing
-          drawFullWaveform(audioBuffer);
-        } catch (err) {
-          console.warn("Could not decode audio for waveform:", err);
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // If nothing is playing, start playing first item
+        if (currentQueueIndex === -1 && mediaQueue.length > 0) {
+          playQueueItem(0);
         }
+
+        // Clear file input so same files can be added again
+        this.value = "";
       });
 
       // Speed control
