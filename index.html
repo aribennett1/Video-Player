@@ -120,6 +120,21 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        cursor: move;
+        user-select: none;
+        transition: background 0.2s;
+      }
+
+      .queue-item:hover {
+        background: #444;
+      }
+
+      .queue-item.dragging {
+        opacity: 0.5;
+      }
+
+      .queue-item.drag-over {
+        border-top: 2px solid #4a9eff;
       }
 
       .queue-item.playing {
@@ -214,6 +229,10 @@
       let mediaQueue = [];
       let currentQueueIndex = -1;
       let currentAudioBuffer = null;
+      let currentPlaybackSpeed = 1.0;
+      
+      // Drag and drop state
+      let draggedIndex = null;
 
       // Ensure canvas drawing size matches its CSS size
       function resizeCanvas() {
@@ -325,6 +344,8 @@
           const li = document.createElement("li");
           li.className =
             "queue-item" + (index === currentQueueIndex ? " playing" : "");
+          li.draggable = true;
+          li.dataset.index = index;
 
           const nameSpan = document.createElement("span");
           nameSpan.className = "queue-item-name";
@@ -334,10 +355,78 @@
           removeBtn.textContent = "Remove";
           removeBtn.onclick = () => removeFromQueue(index);
 
+          // Drag and drop event handlers
+          li.addEventListener("dragstart", handleDragStart);
+          li.addEventListener("dragend", handleDragEnd);
+          li.addEventListener("dragover", handleDragOver);
+          li.addEventListener("drop", handleDrop);
+          li.addEventListener("dragleave", handleDragLeave);
+
+          // Double-click to play
+          li.addEventListener("dblclick", () => {
+            playQueueItem(index);
+          });
+
           li.appendChild(nameSpan);
           li.appendChild(removeBtn);
           queueList.appendChild(li);
         });
+      }
+
+      // Drag and drop handlers
+      function handleDragStart(e) {
+        draggedIndex = parseInt(e.currentTarget.dataset.index);
+        e.currentTarget.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+      }
+
+      function handleDragEnd(e) {
+        e.currentTarget.classList.remove("dragging");
+        // Remove all drag-over classes
+        document.querySelectorAll(".queue-item").forEach((item) => {
+          item.classList.remove("drag-over");
+        });
+      }
+
+      function handleDragOver(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const targetIndex = parseInt(e.currentTarget.dataset.index);
+        if (targetIndex !== draggedIndex) {
+          e.currentTarget.classList.add("drag-over");
+        }
+        return false;
+      }
+
+      function handleDragLeave(e) {
+        e.currentTarget.classList.remove("drag-over");
+      }
+
+      function handleDrop(e) {
+        e.stopPropagation();
+        e.preventDefault();
+
+        const targetIndex = parseInt(e.currentTarget.dataset.index);
+
+        if (draggedIndex !== null && draggedIndex !== targetIndex) {
+          // Reorder the queue
+          const draggedItem = mediaQueue[draggedIndex];
+          mediaQueue.splice(draggedIndex, 1);
+          mediaQueue.splice(targetIndex, 0, draggedItem);
+
+          // Update currentQueueIndex if necessary
+          if (currentQueueIndex === draggedIndex) {
+            currentQueueIndex = targetIndex;
+          } else if (draggedIndex < currentQueueIndex && targetIndex >= currentQueueIndex) {
+            currentQueueIndex--;
+          } else if (draggedIndex > currentQueueIndex && targetIndex <= currentQueueIndex) {
+            currentQueueIndex++;
+          }
+
+          updateQueueDisplay();
+        }
+
+        return false;
       }
 
       // Remove item from queue
@@ -413,6 +502,12 @@
           audioPlayer.hidden = false;
           videoPlayer.hidden = true;
           audioPlayer.load();
+          
+          // Set playback rate after metadata loads
+          audioPlayer.onloadedmetadata = () => {
+            audioPlayer.playbackRate = currentPlaybackSpeed;
+          };
+          
           audioPlayer
             .play()
             .catch((err) =>
@@ -423,6 +518,12 @@
           videoPlayer.hidden = false;
           audioPlayer.hidden = true;
           videoPlayer.load();
+          
+          // Set playback rate after metadata loads
+          videoPlayer.onloadedmetadata = () => {
+            videoPlayer.playbackRate = currentPlaybackSpeed;
+          };
+          
           videoPlayer
             .play()
             .catch((err) =>
@@ -467,6 +568,7 @@
         const val = parseFloat(this.value);
         if (isNaN(val) || val <= 0) return;
 
+        currentPlaybackSpeed = val;
         if (!videoPlayer.hidden) videoPlayer.playbackRate = val;
         if (!audioPlayer.hidden) audioPlayer.playbackRate = val;
       });
@@ -496,11 +598,13 @@
           case "D":
             e.preventDefault();
             player.playbackRate = Math.min(player.playbackRate + 0.1, 100);
+            currentPlaybackSpeed = player.playbackRate;
             break;
           case "s":
           case "S":
             e.preventDefault();
             player.playbackRate = Math.max(player.playbackRate - 0.1, 0.1);
+            currentPlaybackSpeed = player.playbackRate;
             break;
           case "ArrowRight":
             e.preventDefault();
@@ -524,7 +628,7 @@
         }
 
         try {
-          speedControl.value = player.playbackRate.toFixed(1);
+          speedControl.value = currentPlaybackSpeed.toFixed(1);
         } catch (err) {
           console.warn(
             "Cannot update speed indicator: video controller UI not fully initialized"

@@ -47,8 +47,10 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 - **Multiple File Selection**: Select multiple audio/video files at once
 - **Sequential Playback**: Automatically plays the next file when the current one ends
 - **Queue Management**: View all queued files with visual indicator of currently playing item
+- **Drag & Drop Reordering**: Click and drag any queue item to reorder the playlist
 - **Remove from Queue**: Remove any file from the queue with a single click
 - **Dynamic Queue**: Add more files to the queue at any time without interrupting playback
+- **Persistent Speed**: Playback speed is maintained across all files in the queue
 
 ## Usage
 
@@ -70,6 +72,10 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 
 - **View Queue**: All queued files are displayed below the controls
 - **Current Item**: The currently playing file is highlighted in blue
+- **Jump to File**: Double-click any queue item to start playing it immediately (queue continues from that point)
+- **Reorder Items**: Click and drag any queue item to move it to a different position
+  - A blue line appears to show where the item will be dropped
+  - The currently playing item can also be reordered
 - **Remove Items**: Click the "Remove" button next to any file to remove it from the queue
 - **Add More Files**: Select additional files at any time to add them to the queue
 - **Auto-Play**: When a file finishes, the next one in the queue automatically starts
