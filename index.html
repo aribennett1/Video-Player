@@ -180,8 +180,8 @@
   </head>
   <body>
     <div class="media-container">
-      <video id="videoPlayer" controls></video>
-      <audio id="audioPlayer" controls hidden></audio>
+      <video id="videoPlayer" controls tabindex="0"></video>
+      <audio id="audioPlayer" controls hidden tabindex="0"></audio>
 
       <div class="waveform-container">
         <canvas id="waveform"></canvas>
@@ -506,6 +506,7 @@
           // Set playback rate after metadata loads
           audioPlayer.onloadedmetadata = () => {
             audioPlayer.playbackRate = currentPlaybackSpeed;
+            audioPlayer.focus(); // Focus so arrow keys work
           };
           
           audioPlayer
@@ -522,6 +523,7 @@
           // Set playback rate after metadata loads
           videoPlayer.onloadedmetadata = () => {
             videoPlayer.playbackRate = currentPlaybackSpeed;
+            videoPlayer.focus(); // Focus so arrow keys work
           };
           
           videoPlayer
@@ -535,6 +537,69 @@
       // Handle media ended event to play next in queue
       videoPlayer.addEventListener("ended", playNext);
       audioPlayer.addEventListener("ended", playNext);
+
+      // Force refocus after any seek to ensure arrow keys work
+      videoPlayer.addEventListener("seeked", function() {
+        setTimeout(() => {
+          videoPlayer.focus();
+        }, 0);
+      });
+      audioPlayer.addEventListener("seeked", function() {
+        setTimeout(() => {
+          audioPlayer.focus();
+        }, 0);
+      });
+      
+      // Try window-level capture as absolute first line of defense
+      window.addEventListener("keydown", function(e) {
+        if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+          const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+          
+          // If player is playing or has focus, intercept
+          if ((document.activeElement === videoPlayer || document.activeElement === audioPlayer) ||
+              (player.duration && !player.paused)) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            
+            if (!player.duration) return;
+            
+            if (e.key === "ArrowRight") {
+              player.currentTime = Math.min(player.currentTime + 2, player.duration);
+            } else {
+              player.currentTime = Math.max(player.currentTime - 2, 0);
+            }
+            return false;
+          }
+        }
+      }, true);
+
+      // Also add document-level capture to block any browser defaults
+      document.addEventListener("keydown", function(e) {
+        if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+          const activeElement = document.activeElement;
+          const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+          
+          // Handle arrow keys if media player has focus OR if it's playing
+          if (activeElement === videoPlayer || activeElement === audioPlayer || 
+              (player.duration && !player.paused)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            
+            if (!player.duration) return;
+            
+            if (e.key === "ArrowRight") {
+              player.currentTime = Math.min(player.currentTime + 2, player.duration);
+            } else {
+              player.currentTime = Math.max(player.currentTime - 2, 0);
+            }
+            
+            // Ensure player has focus for consistent behavior
+            player.focus();
+          }
+        }
+      }, true);
+
 
       fileInput.addEventListener("change", async function () {
         const files = Array.from(this.files);
@@ -584,6 +649,9 @@
         const newTime = percentage * player.duration;
 
         player.currentTime = Math.max(0, Math.min(newTime, player.duration));
+        
+        // Refocus the player so arrow keys work correctly
+        player.focus();
       });
 
       // Keyboard shortcuts
