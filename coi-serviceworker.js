@@ -38,6 +38,7 @@ if (typeof window === "undefined") {
 } else {
   // ---- Running as a page script — registers itself as the Service Worker ----
   (async () => {
+    console.log("[coi-serviceworker] Page script running. crossOriginIsolated:", window.crossOriginIsolated, "SharedArrayBuffer:", typeof SharedArrayBuffer !== "undefined");
     if (window.crossOriginIsolated !== false) return; // already isolated, nothing to do
 
     if (!navigator.serviceWorker) {
@@ -50,7 +51,10 @@ if (typeof window === "undefined") {
         window.document.currentScript.src
       );
 
-      const reload = () => window.location.reload();
+      const reload = () => {
+        console.log("[coi-serviceworker] Reloading page to activate cross-origin isolation...");
+        window.location.reload();
+      };
 
       if (reg.active) {
         // Service worker already active — just reload to pick up headers

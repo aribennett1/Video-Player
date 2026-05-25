@@ -414,12 +414,15 @@
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
 
         ffmpegLoadPromise = (async () => {
+          console.log("[ffmpeg] Starting load. crossOriginIsolated:", window.crossOriginIsolated, "SharedArrayBuffer available:", typeof SharedArrayBuffer !== "undefined");
           const { createFFmpeg } = FFmpeg;
           const ff = createFFmpeg({
             corePath: "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
-            log: false,
+            log: true,
           });
+          console.log("[ffmpeg] Calling ff.load()...");
           await ff.load();
+          console.log("[ffmpeg] ff.load() complete.");
           ffmpegInstance = ff;
           ffmpegLoadPromise = null;
           return ff;
@@ -430,25 +433,41 @@
 
       // Use ffmpeg to strip audio to a tiny 8kbps/8kHz mono MP3, return its ArrayBuffer
       async function extractAudioWithFFmpeg(file) {
+        console.log("[ffmpeg] extractAudioWithFFmpeg called. File:", file.name, "size:", file.size, "type:", file.type);
+
         const ff = await getFFmpeg();
+        console.log("[ffmpeg] Got ffmpeg instance.");
 
         const ext = file.name.slice(file.name.lastIndexOf(".")) || ".mp4";
         const inputName = `input${ext}`;
 
-        // Use arrayBuffer() directly — more reliable than fetchFile() with File objects
-        const fileData = await file.arrayBuffer();
+        console.log("[ffmpeg] Reading file.arrayBuffer()...");
+        let fileData;
+        try {
+          fileData = await file.arrayBuffer();
+          console.log("[ffmpeg] arrayBuffer() success. Byte length:", fileData.byteLength);
+        } catch (err) {
+          console.error("[ffmpeg] file.arrayBuffer() FAILED:", err);
+          throw err;
+        }
+
+        console.log("[ffmpeg] Writing to FS as:", inputName);
         ff.FS("writeFile", inputName, new Uint8Array(fileData));
+        console.log("[ffmpeg] FS write done. Running extraction...");
+
         await ff.run(
           "-i", inputName,
-          "-vn",          // drop video stream
-          "-ac", "1",     // mono
-          "-ar", "8000",  // 8 kHz sample rate
-          "-b:a", "8k",   // 8 kbps bitrate
+          "-vn",
+          "-ac", "1",
+          "-ar", "8000",
+          "-b:a", "8k",
           "-f", "mp3",
           "audio.mp3"
         );
+        console.log("[ffmpeg] ff.run() complete.");
 
         const data = ff.FS("readFile", "audio.mp3");
+        console.log("[ffmpeg] Read audio.mp3 from FS. Byte length:", data.byteLength);
         ff.FS("unlink", inputName);
         ff.FS("unlink", "audio.mp3");
 
@@ -457,9 +476,9 @@
 
       async function renderWaveformForItem(item) {
         resizeCanvas();
+        console.log("[waveform] renderWaveformForItem. isAudio:", item.isAudio, "file:", item.name);
 
         if (item.isAudio) {
-          // Audio files: decode directly with Web Audio API
           try {
             if (audioCtx.state === "suspended") await audioCtx.resume();
             const arrayBuffer = await item.file.arrayBuffer();
@@ -470,7 +489,6 @@
             drawFlatFallback();
           }
         } else {
-          // Video files: strip audio with ffmpeg then decode the tiny result
           drawWaveformLoadingState("Generating waveform\u2026");
           try {
             const audioArrayBuffer = await extractAudioWithFFmpeg(item.file);
