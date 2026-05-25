@@ -108,9 +108,8 @@ Positions are stored as JSON keyed by filename in both a cookie (`max-age` 1 yea
 
 | Library | Version | Purpose |
 |---|---|---|
-| `@ffmpeg/ffmpeg` | 0.12.10 | ffmpeg.wasm browser wrapper |
-| `@ffmpeg/util` | 0.12.1 | `fetchFile` / `toBlobURL` helpers |
-| `@ffmpeg/core` | 0.12.6 | Single-threaded wasm core (no COOP/COEP headers required) |
+| `@ffmpeg/ffmpeg` | 0.11.6 | ffmpeg.wasm browser wrapper (inline blob worker — no cross-origin worker issue) |
+| `@ffmpeg/core` | 0.11.0 | Single-threaded wasm core (no WASM threads, no COOP/COEP headers required) |
 
 Loaded from [unpkg.com](https://unpkg.com) CDN. No build step or npm install required.
 

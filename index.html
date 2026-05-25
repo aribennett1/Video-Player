@@ -4,8 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Advanced Media Player</title>
-    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-    <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
     <style>
       body {
         background-color: #000;
@@ -411,14 +410,12 @@
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
 
         ffmpegLoadPromise = (async () => {
-          const { FFmpeg } = FFmpegWASM;
-          const { toBlobURL } = FFmpegUtil;
-          const ff = new FFmpeg();
-          const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
-          await ff.load({
-            coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+          const { createFFmpeg } = FFmpeg;
+          const ff = createFFmpeg({
+            corePath: "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
+            log: false,
           });
+          await ff.load();
           ffmpegInstance = ff;
           ffmpegLoadPromise = null;
           return ff;
@@ -430,25 +427,25 @@
       // Use ffmpeg to strip audio to a tiny 8kbps/8kHz mono MP3, return its ArrayBuffer
       async function extractAudioWithFFmpeg(file) {
         const ff = await getFFmpeg();
-        const { fetchFile } = FFmpegUtil;
+        const { fetchFile } = FFmpeg;
 
         const ext = file.name.slice(file.name.lastIndexOf(".")) || ".mp4";
         const inputName = `input${ext}`;
 
-        await ff.writeFile(inputName, await fetchFile(file));
-        await ff.exec([
+        ff.FS("writeFile", inputName, await fetchFile(file));
+        await ff.run(
           "-i", inputName,
           "-vn",          // drop video stream
           "-ac", "1",     // mono
           "-ar", "8000",  // 8 kHz sample rate
           "-b:a", "8k",   // 8 kbps bitrate
           "-f", "mp3",
-          "audio.mp3",
-        ]);
+          "audio.mp3"
+        );
 
-        const data = await ff.readFile("audio.mp3");
-        await ff.deleteFile(inputName);
-        await ff.deleteFile("audio.mp3");
+        const data = ff.FS("readFile", "audio.mp3");
+        ff.FS("unlink", inputName);
+        ff.FS("unlink", "audio.mp3");
 
         return data.buffer;
       }
