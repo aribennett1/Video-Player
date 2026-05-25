@@ -109,7 +109,10 @@ Positions are stored as JSON keyed by filename in both a cookie (`max-age` 1 yea
 | Library | Version | Purpose |
 |---|---|---|
 | `@ffmpeg/ffmpeg` | 0.11.6 | ffmpeg.wasm browser wrapper (inline blob worker — no cross-origin worker issue) |
-| `@ffmpeg/core` | 0.11.0 | Single-threaded wasm core (no WASM threads, no COOP/COEP headers required) |
+| `@ffmpeg/core` | 0.11.0 | Single-threaded wasm core |
+| `coi-serviceworker` | — | Bundled in repo; injects COOP/COEP headers via service worker to enable `SharedArrayBuffer` on GitHub Pages |
+
+> **First-load note:** On first visit (or after clearing site data), `coi-serviceworker` triggers one automatic page reload to install the service worker. Subsequent loads are instant.
 
 Loaded from [unpkg.com](https://unpkg.com) CDN. No build step or npm install required.
 
