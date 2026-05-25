@@ -414,15 +414,16 @@
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
 
         ffmpegLoadPromise = (async () => {
-          console.log("[ffmpeg] Starting load. crossOriginIsolated:", window.crossOriginIsolated, "SharedArrayBuffer available:", typeof SharedArrayBuffer !== "undefined");
+          const t = () => `[${new Date().toISOString()}]`;
+          console.log(t(), "[ffmpeg] Starting load. crossOriginIsolated:", window.crossOriginIsolated, "SharedArrayBuffer:", typeof SharedArrayBuffer !== "undefined", "SW controller:", !!(navigator.serviceWorker && navigator.serviceWorker.controller));
           const { createFFmpeg } = FFmpeg;
           const ff = createFFmpeg({
             corePath: "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
             log: true,
           });
-          console.log("[ffmpeg] Calling ff.load()...");
+          console.log(t(), "[ffmpeg] Calling ff.load()...");
           await ff.load();
-          console.log("[ffmpeg] ff.load() complete.");
+          console.log(t(), "[ffmpeg] ff.load() complete.");
           ffmpegInstance = ff;
           ffmpegLoadPromise = null;
           return ff;
@@ -433,27 +434,28 @@
 
       // Use ffmpeg to strip audio to a tiny 8kbps/8kHz mono MP3, return its ArrayBuffer
       async function extractAudioWithFFmpeg(file) {
-        console.log("[ffmpeg] extractAudioWithFFmpeg called. File:", file.name, "size:", file.size, "type:", file.type);
+        const t = () => `[${new Date().toISOString()}]`;
+        console.log(t(), "[ffmpeg] extractAudioWithFFmpeg called. File:", file.name, "size:", file.size, "type:", file.type);
 
         const ff = await getFFmpeg();
-        console.log("[ffmpeg] Got ffmpeg instance.");
+        console.log(t(), "[ffmpeg] Got ffmpeg instance.");
 
         const ext = file.name.slice(file.name.lastIndexOf(".")) || ".mp4";
         const inputName = `input${ext}`;
 
-        console.log("[ffmpeg] Reading file.arrayBuffer()...");
+        console.log(t(), "[ffmpeg] Reading file.arrayBuffer()...");
         let fileData;
         try {
           fileData = await file.arrayBuffer();
-          console.log("[ffmpeg] arrayBuffer() success. Byte length:", fileData.byteLength);
+          console.log(t(), "[ffmpeg] arrayBuffer() success. Byte length:", fileData.byteLength);
         } catch (err) {
-          console.error("[ffmpeg] file.arrayBuffer() FAILED:", err);
+          console.error(t(), "[ffmpeg] file.arrayBuffer() FAILED:", err);
           throw err;
         }
 
-        console.log("[ffmpeg] Writing to FS as:", inputName);
+        console.log(t(), "[ffmpeg] Writing to FS as:", inputName);
         ff.FS("writeFile", inputName, new Uint8Array(fileData));
-        console.log("[ffmpeg] FS write done. Running extraction...");
+        console.log(t(), "[ffmpeg] FS write done. Running extraction...");
 
         await ff.run(
           "-i", inputName,
@@ -464,10 +466,10 @@
           "-f", "mp3",
           "audio.mp3"
         );
-        console.log("[ffmpeg] ff.run() complete.");
+        console.log(t(), "[ffmpeg] ff.run() complete.");
 
         const data = ff.FS("readFile", "audio.mp3");
-        console.log("[ffmpeg] Read audio.mp3 from FS. Byte length:", data.byteLength);
+        console.log(t(), "[ffmpeg] Read audio.mp3 from FS. Byte length:", data.byteLength);
         ff.FS("unlink", inputName);
         ff.FS("unlink", "audio.mp3");
 
@@ -475,8 +477,9 @@
       }
 
       async function renderWaveformForItem(item) {
+        const t = () => `[${new Date().toISOString()}]`;
         resizeCanvas();
-        console.log("[waveform] renderWaveformForItem. isAudio:", item.isAudio, "file:", item.name);
+        console.log(t(), "[waveform] renderWaveformForItem. isAudio:", item.isAudio, "file:", item.name, "crossOriginIsolated:", window.crossOriginIsolated);
 
         if (item.isAudio) {
           try {
