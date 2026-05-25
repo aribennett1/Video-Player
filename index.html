@@ -431,12 +431,13 @@
       // Use ffmpeg to strip audio to a tiny 8kbps/8kHz mono MP3, return its ArrayBuffer
       async function extractAudioWithFFmpeg(file) {
         const ff = await getFFmpeg();
-        const { fetchFile } = FFmpeg;
 
         const ext = file.name.slice(file.name.lastIndexOf(".")) || ".mp4";
         const inputName = `input${ext}`;
 
-        ff.FS("writeFile", inputName, await fetchFile(file));
+        // Use arrayBuffer() directly — more reliable than fetchFile() with File objects
+        const fileData = await file.arrayBuffer();
+        ff.FS("writeFile", inputName, new Uint8Array(fileData));
         await ff.run(
           "-i", inputName,
           "-vn",          // drop video stream
