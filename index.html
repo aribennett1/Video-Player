@@ -437,13 +437,10 @@
         const t = () => `[${new Date().toISOString()}]`;
         console.log(t(), "[ffmpeg] extractAudioWithFFmpeg called. File:", file.name, "size:", file.size, "type:", file.type);
 
-        const ff = await getFFmpeg();
-        console.log(t(), "[ffmpeg] Got ffmpeg instance.");
-
-        const ext = file.name.slice(file.name.lastIndexOf(".")) || ".mp4";
-        const inputName = `input${ext}`;
-
-        console.log(t(), "[ffmpeg] Reading file.arrayBuffer()...");
+        // Read the file into memory FIRST before any other async work.
+        // On iOS, Photos-library file references expire after a short time,
+        // so we must capture the data immediately before awaiting ffmpeg.load().
+        console.log(t(), "[ffmpeg] Reading file.arrayBuffer() eagerly (before ffmpeg load)...");
         let fileData;
         try {
           fileData = await file.arrayBuffer();
@@ -452,6 +449,12 @@
           console.error(t(), "[ffmpeg] file.arrayBuffer() FAILED:", err);
           throw err;
         }
+
+        const ff = await getFFmpeg();
+        console.log(t(), "[ffmpeg] Got ffmpeg instance.");
+
+        const ext = file.name.slice(file.name.lastIndexOf(".")) || ".mp4";
+        const inputName = `input${ext}`;
 
         console.log(t(), "[ffmpeg] Writing to FS as:", inputName);
         ff.FS("writeFile", inputName, new Uint8Array(fileData));
