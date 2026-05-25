@@ -110,7 +110,7 @@ Positions are stored as JSON keyed by filename in both a cookie (`max-age` 1 yea
 |---|---|---|
 | `@ffmpeg/ffmpeg` | 0.12.10 | ffmpeg.wasm browser wrapper |
 | `@ffmpeg/util` | 0.12.1 | `fetchFile` / `toBlobURL` helpers |
-| `@ffmpeg/core-st` | 0.12.6 | Single-threaded wasm core (no COOP/COEP headers required) |
+| `@ffmpeg/core` | 0.12.6 | Single-threaded wasm core (no COOP/COEP headers required) |
 
 Loaded from [unpkg.com](https://unpkg.com) CDN. No build step or npm install required.
 
