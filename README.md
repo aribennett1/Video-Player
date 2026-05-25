@@ -1,138 +1,119 @@
 # Advanced Media Player
 
-A modern, feature-rich HTML5 media player that supports both audio and video playback with advanced controls and visualizations.
+A modern, feature-rich HTML5 media player that supports both audio and video playback with advanced controls and visualizations. Runs entirely in the browser — no server required.
 
 ## Features
 
 ### 🎵 Universal Media Support
 
-- **Video Playback**: Supports all browser-compatible video formats (MP4, WebM, etc.)
-- **Audio Playback**: Supports all browser-compatible audio formats (MP3, WAV, OGG, etc.)
+- **Video Playback**: Supports all browser-compatible video formats (MP4, WebM, MKV, MOV, etc.)
+- **Audio Playback**: Supports all browser-compatible audio formats (MP3, WAV, OGG, AAC, etc.)
 - Automatic format detection and appropriate player selection
 
 ### ⚡ Speed Control
 
 - **Variable Playback Speed**: Adjust from 0.1x to 100x speed
 - **Manual Input**: Direct speed entry via number input field
+- **Persistent Across Files**: Speed setting is maintained when the queue advances to the next file
 - **Keyboard Shortcuts**: Quick speed adjustments using hotkeys
   - Press `D` to increase speed by 0.1x
   - Press `S` to decrease speed by 0.1x
-- Real-time speed display updates
 
 ### 📊 Waveform Visualization
 
-- **Full-Length Waveform**: Visual representation of the entire audio track
-- **Progress Overlay**: Real-time visual indicator showing current playback position on the waveform
+- **Full-Length Waveform**: Accurate amplitude visualization of the entire audio track
+- **Progress Overlay**: Real-time blue tint + white line showing current playback position
 - **Interactive Seeking**: Click anywhere on the waveform to jump to that timestamp
-- **Auto-Generated**: Automatically creates waveform for any loaded media file
-- Works for both video (audio track) and audio files
+- **Video Support via ffmpeg.wasm**: For video files, audio is extracted at 8kbps/8kHz mono using ffmpeg running entirely in the browser — enabling accurate waveforms for videos of any length
+- **Loading State**: "Generating waveform…" indicator shown while ffmpeg processes a video
+- **Graceful Fallback**: Shows a flat placeholder bar if waveform generation fails
 
 ### ⌨️ Keyboard Shortcuts
 
-- `D` - Increase playback speed by 0.1x
-- `S` - Slow down playback speed by 0.1x
-- `→` (Right Arrow) - Skip forward 2 seconds
-- `←` (Left Arrow) - Skip backward 2 seconds
-- `Space` - Play/Pause toggle
-
-### 🎨 User Interface
-
-- **Dark Theme**: Easy on the eyes with black background and sleek design
-- **Responsive Design**: Adapts to different screen sizes
-- **Clean Layout**: Minimalist interface focusing on functionality
-- **Visual Feedback**: Blue waveform bars for clear visualization
+- `D` — Increase playback speed by 0.1x
+- `S` — Decrease playback speed by 0.1x
+- `→` (Right Arrow) — Skip forward 2 seconds
+- `←` (Left Arrow) — Skip backward 2 seconds
+- `Space` — Play/Pause toggle
 
 ### 📋 Queue System
 
-- **Multiple File Selection**: Select multiple audio/video files at once
+- **Multiple File Selection**: Select multiple audio/video files at once (hold Ctrl/Cmd or Shift)
 - **Sequential Playback**: Automatically plays the next file when the current one ends
-- **Queue Management**: View all queued files with visual indicator of currently playing item
-- **Drag & Drop Reordering**: Click and drag any queue item to reorder the playlist
-- **Remove from Queue**: Remove any file from the queue with a single click
-- **Dynamic Queue**: Add more files to the queue at any time without interrupting playback
-- **Persistent Speed**: Playback speed is maintained across all files in the queue
+- **Double-Click to Jump**: Double-click any queue item to start playing it immediately; queue continues from that point
+- **Drag & Drop Reordering**: Drag any queue item to reorder the playlist
+- **Remove from Queue**: Click the "Remove" button to remove a file — also clears its saved position
+- **Dynamic Queue**: Add more files at any time without interrupting playback
+- **Currently Playing Indicator**: Active file is highlighted in blue
+
+### 💾 Playback Position Memory
+
+- **Persistent Resume**: The timestamp you were at is saved per filename and restored when you reload the same file
+- **Cross-Tab**: Positions are stored in both a cookie and localStorage — accessible across tabs and browser sessions
+- **Auto-Save**: Position is saved every ~5 seconds during playback, on pause, on seek, and on page close
+- **Storage Management**: Cookie entries are sorted by most-recently-used and pruned if storage limits are approached
+- **Clear on Remove**: Removing a file from the queue also deletes its saved position
 
 ## Usage
 
 ### Getting Started
 
-1. Open `Advanced Media Player.html` in any modern web browser
-2. Click "Choose File" to select a video or audio file
-3. The media will automatically load and begin playing
-4. The waveform will be generated and displayed
-
-### Loading Media
-
-- Click the file input button at the top of the player
-- Select one or multiple audio/video files from your computer (hold Ctrl/Cmd or Shift to select multiple)
-- Files will be added to the queue and playback will start automatically
-- Supported formats depend on your browser (common formats like MP4, MP3, WAV, etc.)
+1. Open `index.html` in any modern web browser
+2. Click "Choose File" to select one or more audio or video files
+3. Playback begins automatically and the waveform is generated
+4. If you loaded a video, the waveform generates in the background via ffmpeg.wasm (first load requires a ~30MB one-time download, cached after that)
 
 ### Managing the Queue
 
 - **View Queue**: All queued files are displayed below the controls
-- **Current Item**: The currently playing file is highlighted in blue
-- **Jump to File**: Double-click any queue item to start playing it immediately (queue continues from that point)
-- **Reorder Items**: Click and drag any queue item to move it to a different position
-  - A blue line appears to show where the item will be dropped
-  - The currently playing item can also be reordered
-- **Remove Items**: Click the "Remove" button next to any file to remove it from the queue
-- **Add More Files**: Select additional files at any time to add them to the queue
-- **Auto-Play**: When a file finishes, the next one in the queue automatically starts
+- **Jump to File**: Double-click any item to play it immediately
+- **Reorder**: Drag and drop items to change play order
+- **Remove**: Click "Remove" to remove a file and clear its saved position
+- **Add More**: Select additional files at any time to append them to the queue
 
 ### Controlling Playback
 
-- **Play/Pause**: Use the native player controls or press `Space`
-- **Seek**: Click on the waveform or use the native player scrubber
-- **Speed**: Use the number input or press `D`/`S` to adjust
+- **Play/Pause**: Native player controls or `Space`
+- **Seek**: Click the waveform, or use the native scrubber
+- **Skip 2 seconds**: Arrow keys (works even after manually seeking)
+- **Speed**: Number input field or `D`/`S` keys
 
-### Speed Control
-
-- Enter a specific speed value in the "Speed" input field
-- Or use keyboard shortcuts for incremental adjustments
-- Speed range: 0.1x (very slow) to 100x (very fast)
-
-### Navigation
-
-- **Quick Skip**: Use arrow keys to skip forward/backward 2 seconds
-- **Precise Seek**: Click on the waveform to jump to exact positions
-- **Visual Reference**: Use the waveform to identify sections of the media
-
-## Technical Requirements
-
-### Browser Compatibility
-
-- Chrome/Edge 14+
-- Firefox 25+
-- Safari 14.1+
-- Any modern browser with HTML5 audio/video and Web Audio API support
-
-### Dependencies
-
-- None! Pure HTML5, CSS3, and vanilla JavaScript
-- No external libraries or frameworks required
-
-## How It Works
+## Technical Details
 
 ### Waveform Generation
 
-1. The entire audio file is decoded using the Web Audio API
-2. Audio samples are processed and averaged into blocks
-3. Each pixel of the canvas represents a block of audio samples
-4. Absolute amplitude values are calculated for visual representation
-5. The waveform is rendered as vertical bars centered on the canvas
+| File type | Method |
+|---|---|
+| Audio (MP3, WAV, etc.) | `file.arrayBuffer()` → Web Audio API `decodeAudioData` |
+| Video (MP4, MOV, etc.) | ffmpeg.wasm strips audio to 8kbps/8kHz mono MP3 → Web Audio API |
 
-### Audio Context
+The ffmpeg.wasm instance is a lazy singleton — it loads once on the first video file and is reused for all subsequent videos in the session.
 
-- Creates an AudioContext for audio processing
-- Decodes audio data from uploaded files
-- Processes the first channel (mono representation)
-- Does not use real-time analysis for performance optimization
+### Arrow Key Seeking Fix
+
+Browsers' native media controls handle arrow keys at a lower level than JavaScript events, defaulting to ~2-minute jumps. This is overridden using window-level `capture` event listeners with `stopImmediatePropagation()`, combined with forced refocus of the media element after every seek.
+
+### Playback Position Storage
+
+Positions are stored as JSON keyed by filename in both a cookie (`max-age` 1 year) and `localStorage`. On read, the cookie is checked first with localStorage as fallback. The cookie is kept under 3.5KB by pruning the oldest entries when needed.
+
+## Browser Compatibility
+
+- Chrome/Edge (recommended)
+- Firefox
+- Safari 14.1+
+- Any modern browser with Web Audio API support
+
+## Dependencies
+
+| Library | Version | Purpose |
+|---|---|---|
+| `@ffmpeg/ffmpeg` | 0.12.10 | ffmpeg.wasm browser wrapper |
+| `@ffmpeg/util` | 0.12.1 | `fetchFile` / `toBlobURL` helpers |
+| `@ffmpeg/core-st` | 0.12.6 | Single-threaded wasm core (no COOP/COEP headers required) |
+
+Loaded from [unpkg.com](https://unpkg.com) CDN. No build step or npm install required.
 
 ## License
 
 Free to use and modify for personal or commercial projects.
-
-## Credits
-
-Built with pure HTML5, CSS3, and JavaScript using the Web Audio API.

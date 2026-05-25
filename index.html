@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Advanced Media Player</title>
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+    <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
     <style>
       body {
         background-color: #000;
@@ -230,9 +232,86 @@
       let currentQueueIndex = -1;
       let currentAudioBuffer = null;
       let currentPlaybackSpeed = 1.0;
+      let currentMediaName = null;
+      let savePositionTimer = null;
+
+      const POSITION_COOKIE_NAME = "mediaPlaybackPositions";
+      const POSITION_SAVE_DELAY_MS = 5000;
+
+      // ffmpeg.wasm singleton — loaded lazily on first video file
+      let ffmpegInstance = null;
+      let ffmpegLoadPromise = null;
       
       // Drag and drop state
       let draggedIndex = null;
+
+      function getCookie(name) {
+        const match = document.cookie.match(
+          new RegExp("(?:^|; )" + name.replace(/[.$?*|{}()[\]\\/+^]/g, "\\$&") + "=([^;]*)")
+        );
+        return match ? decodeURIComponent(match[1]) : null;
+      }
+
+      function setCookie(name, value, maxAgeSeconds) {
+        document.cookie =
+          `${name}=${encodeURIComponent(value)}; max-age=${maxAgeSeconds}; path=/; SameSite=Lax`;
+      }
+
+      function readPositionStore() {
+        try {
+          const rawCookie = getCookie(POSITION_COOKIE_NAME);
+          const raw = rawCookie || localStorage.getItem(POSITION_COOKIE_NAME) || "{}";
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch (err) {
+          console.warn("Could not read playback-position cookie:", err);
+          return {};
+        }
+      }
+
+      function writePositionStore(store) {
+        const entries = Object.entries(store)
+          .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0));
+        let prunedStore = Object.fromEntries(entries);
+        let serialized = JSON.stringify(prunedStore);
+
+        // Keep the cookie comfortably under common browser cookie-size limits.
+        while (serialized.length > 3500 && entries.length > 1) {
+          entries.pop();
+          prunedStore = Object.fromEntries(entries);
+          serialized = JSON.stringify(prunedStore);
+        }
+
+        setCookie(POSITION_COOKIE_NAME, serialized, 60 * 60 * 24 * 365);
+        localStorage.setItem(POSITION_COOKIE_NAME, serialized);
+      }
+
+      function saveCurrentPositionNow() {
+        const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+        if (!currentMediaName || !player.duration || isNaN(player.duration)) return;
+
+        const store = readPositionStore();
+        store[currentMediaName] = {
+          time: Math.max(0, Math.min(player.currentTime || 0, player.duration || 0)),
+          duration: player.duration,
+          updatedAt: Date.now(),
+        };
+        writePositionStore(store);
+      }
+
+      function schedulePositionSave() {
+        if (savePositionTimer) return;
+        savePositionTimer = setTimeout(() => {
+          savePositionTimer = null;
+          saveCurrentPositionNow();
+        }, POSITION_SAVE_DELAY_MS);
+      }
+
+      function getSavedPosition(filename) {
+        const saved = readPositionStore()[filename];
+        const time = typeof saved === "number" ? saved : saved && saved.time;
+        return Number.isFinite(time) && time > 0 ? time : 0;
+      }
 
       // Ensure canvas drawing size matches its CSS size
       function resizeCanvas() {
@@ -295,6 +374,111 @@
             halfHeight
           );
           ctx.fillRect(x, midY - barHeight, 1, barHeight * 2);
+        }
+      }
+
+      // Show a loading state on the waveform canvas while ffmpeg is working
+      function drawWaveformLoadingState(message) {
+        currentAudioBuffer = null;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#111";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "rgba(74, 158, 255, 0.3)";
+        ctx.fillRect(0, canvas.height / 2 - 2, canvas.width, 4);
+        ctx.font = "12px Arial";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+        ctx.fillText(message, 8, 18);
+      }
+
+      // Flat bar shown when waveform generation fails entirely
+      function drawFlatFallback() {
+        currentAudioBuffer = null;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#111";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#4a9eff";
+        const midY = canvas.height / 2;
+        const barHeight = canvas.height * 0.15;
+        ctx.fillRect(0, midY - barHeight, canvas.width, barHeight * 2);
+        ctx.font = "12px Arial";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+        ctx.fillText("Waveform unavailable", 8, 18);
+      }
+
+      // Lazy-load the ffmpeg.wasm singleton (single-threaded, no COOP/COEP needed)
+      async function getFFmpeg() {
+        if (ffmpegInstance) return ffmpegInstance;
+        if (ffmpegLoadPromise) return ffmpegLoadPromise;
+
+        ffmpegLoadPromise = (async () => {
+          const { FFmpeg } = FFmpegWASM;
+          const { toBlobURL } = FFmpegUtil;
+          const ff = new FFmpeg();
+          const baseURL = "https://unpkg.com/@ffmpeg/core-st@0.12.6/dist/umd";
+          await ff.load({
+            coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+          });
+          ffmpegInstance = ff;
+          ffmpegLoadPromise = null;
+          return ff;
+        })();
+
+        return ffmpegLoadPromise;
+      }
+
+      // Use ffmpeg to strip audio to a tiny 8kbps/8kHz mono MP3, return its ArrayBuffer
+      async function extractAudioWithFFmpeg(file) {
+        const ff = await getFFmpeg();
+        const { fetchFile } = FFmpegUtil;
+
+        const ext = file.name.slice(file.name.lastIndexOf(".")) || ".mp4";
+        const inputName = `input${ext}`;
+
+        await ff.writeFile(inputName, await fetchFile(file));
+        await ff.exec([
+          "-i", inputName,
+          "-vn",          // drop video stream
+          "-ac", "1",     // mono
+          "-ar", "8000",  // 8 kHz sample rate
+          "-b:a", "8k",   // 8 kbps bitrate
+          "-f", "mp3",
+          "audio.mp3",
+        ]);
+
+        const data = await ff.readFile("audio.mp3");
+        await ff.deleteFile(inputName);
+        await ff.deleteFile("audio.mp3");
+
+        return data.buffer;
+      }
+
+      async function renderWaveformForItem(item) {
+        resizeCanvas();
+
+        if (item.isAudio) {
+          // Audio files: decode directly with Web Audio API
+          try {
+            if (audioCtx.state === "suspended") await audioCtx.resume();
+            const arrayBuffer = await item.file.arrayBuffer();
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            drawFullWaveform(audioBuffer);
+          } catch (err) {
+            console.warn("Could not decode audio for waveform:", err);
+            drawFlatFallback();
+          }
+        } else {
+          // Video files: strip audio with ffmpeg then decode the tiny result
+          drawWaveformLoadingState("Generating waveform\u2026");
+          try {
+            const audioArrayBuffer = await extractAudioWithFFmpeg(item.file);
+            if (audioCtx.state === "suspended") await audioCtx.resume();
+            const audioBuffer = await audioCtx.decodeAudioData(audioArrayBuffer);
+            drawFullWaveform(audioBuffer);
+          } catch (err) {
+            console.warn("ffmpeg audio extraction failed:", err);
+            drawFlatFallback();
+          }
         }
       }
 
@@ -430,7 +614,18 @@
       }
 
       // Remove item from queue
+      function deletePositionEntry(filename) {
+        const store = readPositionStore();
+        if (filename in store) {
+          delete store[filename];
+          writePositionStore(store);
+        }
+      }
+
       function removeFromQueue(index) {
+        const removedName = mediaQueue[index].name;
+        deletePositionEntry(removedName);
+
         if (index === currentQueueIndex) {
           // If removing currently playing item, play next
           mediaQueue.splice(index, 1);
@@ -469,23 +664,10 @@
 
         updateQueueDisplay();
 
-        // Load media
-        loadMedia(item.url, item.isAudio);
+        // Load media and restore any cookie-saved playback position for this filename.
+        const player = await loadMedia(item.url, item.isAudio, item.name);
 
-        // Decode for waveform
-        try {
-          if (audioCtx.state === "suspended") {
-            await audioCtx.resume();
-          }
-          const arrayBuffer = await item.file.arrayBuffer();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-          resizeCanvas();
-          drawFullWaveform(audioBuffer);
-        } catch (err) {
-          console.warn("Could not decode audio for waveform:", err);
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          currentAudioBuffer = null;
-        }
+        await renderWaveformForItem(item);
       }
 
       // Play next in queue
@@ -496,47 +678,48 @@
       }
 
       // Just load/play media; no realtime analyzer
-      function loadMedia(url, isAudio) {
-        if (isAudio) {
-          audioPlayer.src = url;
-          audioPlayer.hidden = false;
-          videoPlayer.hidden = true;
-          audioPlayer.load();
-          
-          // Set playback rate after metadata loads
-          audioPlayer.onloadedmetadata = () => {
-            audioPlayer.playbackRate = currentPlaybackSpeed;
-            audioPlayer.focus(); // Focus so arrow keys work
+      function loadMedia(url, isAudio, fileName) {
+        currentMediaName = fileName;
+        const savedTime = getSavedPosition(fileName);
+        const player = isAudio ? audioPlayer : videoPlayer;
+        const otherPlayer = isAudio ? videoPlayer : audioPlayer;
+
+        otherPlayer.pause();
+        otherPlayer.hidden = true;
+        player.hidden = false;
+        player.src = url;
+        player.load();
+
+        return new Promise((resolve) => {
+          player.onloadedmetadata = () => {
+            player.playbackRate = currentPlaybackSpeed;
+
+            if (savedTime > 0 && player.duration && savedTime < player.duration - 1) {
+              player.currentTime = savedTime;
+            }
+
+            player.focus(); // Focus so arrow keys work
+            resolve(player);
           };
-          
-          audioPlayer
+
+          player
             .play()
             .catch((err) =>
-              console.warn("Audio play blocked by browser:", err)
+              console.warn(`${isAudio ? "Audio" : "Video"} play blocked by browser:`, err)
             );
-        } else {
-          videoPlayer.src = url;
-          videoPlayer.hidden = false;
-          audioPlayer.hidden = true;
-          videoPlayer.load();
-          
-          // Set playback rate after metadata loads
-          videoPlayer.onloadedmetadata = () => {
-            videoPlayer.playbackRate = currentPlaybackSpeed;
-            videoPlayer.focus(); // Focus so arrow keys work
-          };
-          
-          videoPlayer
-            .play()
-            .catch((err) =>
-              console.warn("Video play blocked by browser:", err)
-            );
-        }
+        });
       }
 
       // Handle media ended event to play next in queue
       videoPlayer.addEventListener("ended", playNext);
       audioPlayer.addEventListener("ended", playNext);
+
+      [videoPlayer, audioPlayer].forEach((player) => {
+        player.addEventListener("timeupdate", schedulePositionSave);
+        player.addEventListener("pause", saveCurrentPositionNow);
+        player.addEventListener("seeked", saveCurrentPositionNow);
+      });
+      window.addEventListener("beforeunload", saveCurrentPositionNow);
 
       // Force refocus after any seek to ensure arrow keys work
       videoPlayer.addEventListener("seeked", function() {
