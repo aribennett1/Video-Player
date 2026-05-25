@@ -433,20 +433,21 @@
       }
 
       // Use ffmpeg to strip audio to a tiny 8kbps/8kHz mono MP3, return its ArrayBuffer
-      async function extractAudioWithFFmpeg(file) {
+      async function extractAudioWithFFmpeg(item) {
         const t = () => `[${new Date().toISOString()}]`;
+        const file = item.file;
         console.log(t(), "[ffmpeg] extractAudioWithFFmpeg called. File:", file.name, "size:", file.size, "type:", file.type);
 
-        // Read the file into memory FIRST before any other async work.
-        // On iOS, Photos-library file references expire after a short time,
-        // so we must capture the data immediately before awaiting ffmpeg.load().
-        console.log(t(), "[ffmpeg] Reading file.arrayBuffer() eagerly (before ffmpeg load)...");
+        // Await the ArrayBuffer that was eagerly started in the fileInput handler.
+        // On iOS, file access expires on the first async yield, so the read must
+        // have been *initiated* synchronously during the original event handler.
+        console.log(t(), "[ffmpeg] Awaiting pre-started arrayBufferPromise...");
         let fileData;
         try {
-          fileData = await file.arrayBuffer();
+          fileData = await item.arrayBufferPromise;
           console.log(t(), "[ffmpeg] arrayBuffer() success. Byte length:", fileData.byteLength);
         } catch (err) {
-          console.error(t(), "[ffmpeg] file.arrayBuffer() FAILED:", err);
+          console.error(t(), "[ffmpeg] arrayBufferPromise FAILED:", err);
           throw err;
         }
 
@@ -497,7 +498,7 @@
         } else {
           drawWaveformLoadingState("Generating waveform\u2026");
           try {
-            const audioArrayBuffer = await extractAudioWithFFmpeg(item.file);
+            const audioArrayBuffer = await extractAudioWithFFmpeg(item);
             if (audioCtx.state === "suspended") await audioCtx.resume();
             const audioBuffer = await audioCtx.decodeAudioData(audioArrayBuffer);
             drawFullWaveform(audioBuffer);
@@ -818,11 +819,20 @@
         files.forEach((file) => {
           const url = URL.createObjectURL(file);
           const isAudio = file.type.startsWith("audio/");
+
+          // Kick off file.arrayBuffer() immediately, synchronously, before any
+          // await. iOS revokes Photos-library file access on the first async yield
+          // so the read must be *started* during this synchronous event handler.
+          // We store the Promise and await it later in extractAudioWithFFmpeg.
+          const arrayBufferPromise = isAudio ? null : file.arrayBuffer();
+          console.log(`[${new Date().toISOString()}] [fileInput] Initiated arrayBuffer() read for`, file.name, "(isAudio:", isAudio + ")");
+
           mediaQueue.push({
             file: file,
             url: url,
             isAudio: isAudio,
             name: file.name,
+            arrayBufferPromise,
           });
         });
 
