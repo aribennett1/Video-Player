@@ -448,6 +448,39 @@
         console.log(ts(), "[waveform] drawFullWaveform complete.");
       }
 
+      // Stream a blob URL into ffmpeg MEMFS in chunks (avoids loading multi-GB files at once)
+      async function streamUrlToMemFS(ff, url, destPath, expectedSize) {
+        console.log(ts(), "[ffmpeg] Streaming to MEMFS:", destPath, "expected size:", expectedSize);
+        const response = await fetch(url);
+        console.log(ts(), "[ffmpeg] fetch() ok:", response.ok, "status:", response.status);
+        if (!response.ok || !response.body) {
+          throw new Error(`fetch failed: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const fd = ff.FS("open", destPath, "w+");
+        let offset = 0;
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            ff.FS("write", fd, value, 0, value.length, offset);
+            const prevMb = Math.floor(offset / (64 * 1024 * 1024));
+            offset += value.length;
+            const currMb = Math.floor(offset / (64 * 1024 * 1024));
+            if (currMb > prevMb) {
+              console.log(ts(), "[ffmpeg] Streamed", offset, "/", expectedSize || "?", "bytes");
+            }
+          }
+        } finally {
+          ff.FS("close", fd);
+        }
+
+        console.log(ts(), "[ffmpeg] Stream complete. Total bytes:", offset);
+        return offset;
+      }
+
       // Strip video audio to a tiny MP3 via ffmpeg, then draw like any audio file
       async function extractAudioWithFFmpeg(item) {
         console.log(ts(), "[ffmpeg] extractAudioWithFFmpeg called.",
@@ -461,21 +494,13 @@
           ? item.name.slice(item.name.lastIndexOf("."))
           : ".mp4";
         const inputName = `input${ext}`;
-        const mountDir = "/input";
-
-        // Mount the File directly in WORKERFS — ffmpeg reads it in chunks without
-        // loading the whole video into JS memory (fetch().blob() fails on ~2.8GB files).
-        console.log(ts(), "[ffmpeg] Mounting File in WORKERFS (streaming reads)...",
-          "file size:", item.file.size);
-        ff.FS("mkdir", mountDir);
-        ff.FS("mount", ff.FS.filesystems.WORKERFS, {
-          files: [{ name: inputName, data: item.file }],
-        }, mountDir);
 
         try {
+          await streamUrlToMemFS(ff, item.url, inputName, item.file.size);
+
           console.log(ts(), "[ffmpeg] Running audio extraction...");
           await ff.run(
-            "-i", `${mountDir}/${inputName}`,
+            "-i", inputName,
             "-vn",
             "-ac", "1",
             "-ar", "8000",
@@ -493,8 +518,8 @@
           console.error(ts(), "[ffmpeg] extraction FAILED:", err);
           throw err;
         } finally {
-          ff.FS("unmount", mountDir);
-          console.log(ts(), "[ffmpeg] WORKERFS unmounted.");
+          try { ff.FS("unlink", inputName); } catch (_) {}
+          console.log(ts(), "[ffmpeg] Cleaned up input file from MEMFS.");
         }
       }
 
