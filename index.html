@@ -408,22 +408,18 @@
         ctx.fillText("Waveform unavailable", 8, 18);
       }
 
-      // Lazy-load the ffmpeg.wasm singleton (single-threaded, no COOP/COEP needed)
+      // Lazy-load the ffmpeg.wasm singleton
       async function getFFmpeg() {
         if (ffmpegInstance) return ffmpegInstance;
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
 
         ffmpegLoadPromise = (async () => {
-          const t = () => `[${new Date().toISOString()}]`;
-          console.log(t(), "[ffmpeg] Starting load. crossOriginIsolated:", window.crossOriginIsolated, "SharedArrayBuffer:", typeof SharedArrayBuffer !== "undefined", "SW controller:", !!(navigator.serviceWorker && navigator.serviceWorker.controller));
           const { createFFmpeg } = FFmpeg;
           const ff = createFFmpeg({
             corePath: "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
-            log: true,
+            log: false,
           });
-          console.log(t(), "[ffmpeg] Calling ff.load()...");
           await ff.load();
-          console.log(t(), "[ffmpeg] ff.load() complete.");
           ffmpegInstance = ff;
           ffmpegLoadPromise = null;
           return ff;
@@ -432,35 +428,23 @@
         return ffmpegLoadPromise;
       }
 
-      // Use ffmpeg to strip audio to a tiny 8kbps/8kHz mono MP3, return its ArrayBuffer
-      async function extractAudioWithFFmpeg(item) {
-        const t = () => `[${new Date().toISOString()}]`;
-        const file = item.file;
-        console.log(t(), "[ffmpeg] extractAudioWithFFmpeg called. File:", file.name, "size:", file.size, "type:", file.type);
+      // Decode an ArrayBuffer and draw the waveform (shared by audio and video paths)
+      async function drawWaveformFromArrayBuffer(arrayBuffer) {
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        drawFullWaveform(audioBuffer);
+      }
 
-        // Await the ArrayBuffer that was eagerly started in the fileInput handler.
-        // On iOS, file access expires on the first async yield, so the read must
-        // have been *initiated* synchronously during the original event handler.
-        console.log(t(), "[ffmpeg] Awaiting pre-started arrayBufferPromise...");
-        let fileData;
-        try {
-          fileData = await item.arrayBufferPromise;
-          console.log(t(), "[ffmpeg] arrayBuffer() success. Byte length:", fileData.byteLength);
-        } catch (err) {
-          console.error(t(), "[ffmpeg] arrayBufferPromise FAILED:", err);
-          throw err;
-        }
-
+      // Strip a video's audio to a tiny 8kbps/8kHz mono MP3 via ffmpeg.wasm
+      async function extractAudioFromVideo(item) {
         const ff = await getFFmpeg();
-        console.log(t(), "[ffmpeg] Got ffmpeg instance.");
+        const { fetchFile } = FFmpeg;
 
-        const ext = file.name.slice(file.name.lastIndexOf(".")) || ".mp4";
+        const ext = item.file.name.slice(item.file.name.lastIndexOf(".")) || ".mp4";
         const inputName = `input${ext}`;
 
-        console.log(t(), "[ffmpeg] Writing to FS as:", inputName);
-        ff.FS("writeFile", inputName, new Uint8Array(fileData));
-        console.log(t(), "[ffmpeg] FS write done. Running extraction...");
-
+        // Use the blob URL (same source as playback) to avoid iOS File-handle expiry
+        ff.FS("writeFile", inputName, await fetchFile(item.url));
         await ff.run(
           "-i", inputName,
           "-vn",
@@ -470,10 +454,8 @@
           "-f", "mp3",
           "audio.mp3"
         );
-        console.log(t(), "[ffmpeg] ff.run() complete.");
 
         const data = ff.FS("readFile", "audio.mp3");
-        console.log(t(), "[ffmpeg] Read audio.mp3 from FS. Byte length:", data.byteLength);
         ff.FS("unlink", inputName);
         ff.FS("unlink", "audio.mp3");
 
@@ -481,31 +463,21 @@
       }
 
       async function renderWaveformForItem(item) {
-        const t = () => `[${new Date().toISOString()}]`;
         resizeCanvas();
-        console.log(t(), "[waveform] renderWaveformForItem. isAudio:", item.isAudio, "file:", item.name, "crossOriginIsolated:", window.crossOriginIsolated);
 
-        if (item.isAudio) {
-          try {
-            if (audioCtx.state === "suspended") await audioCtx.resume();
-            const arrayBuffer = await item.file.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-            drawFullWaveform(audioBuffer);
-          } catch (err) {
-            console.warn("Could not decode audio for waveform:", err);
-            drawFlatFallback();
+        try {
+          let audioArrayBuffer;
+
+          if (item.isAudio) {
+            audioArrayBuffer = await item.file.arrayBuffer();
+          } else {
+            drawWaveformLoadingState("Generating waveform\u2026");
+            audioArrayBuffer = await extractAudioFromVideo(item);
           }
-        } else {
-          drawWaveformLoadingState("Generating waveform\u2026");
-          try {
-            const audioArrayBuffer = await extractAudioWithFFmpeg(item);
-            if (audioCtx.state === "suspended") await audioCtx.resume();
-            const audioBuffer = await audioCtx.decodeAudioData(audioArrayBuffer);
-            drawFullWaveform(audioBuffer);
-          } catch (err) {
-            console.warn("ffmpeg audio extraction failed:", err);
-            drawFlatFallback();
-          }
+
+          await drawWaveformFromArrayBuffer(audioArrayBuffer);
+        } catch (err) {
+          drawFlatFallback();
         }
       }
 
@@ -819,20 +791,11 @@
         files.forEach((file) => {
           const url = URL.createObjectURL(file);
           const isAudio = file.type.startsWith("audio/");
-
-          // Kick off file.arrayBuffer() immediately, synchronously, before any
-          // await. iOS revokes Photos-library file access on the first async yield
-          // so the read must be *started* during this synchronous event handler.
-          // We store the Promise and await it later in extractAudioWithFFmpeg.
-          const arrayBufferPromise = isAudio ? null : file.arrayBuffer();
-          console.log(`[${new Date().toISOString()}] [fileInput] Initiated arrayBuffer() read for`, file.name, "(isAudio:", isAudio + ")");
-
           mediaQueue.push({
             file: file,
             url: url,
             isAudio: isAudio,
             name: file.name,
-            arrayBufferPromise,
           });
         });
 
