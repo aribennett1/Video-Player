@@ -238,8 +238,9 @@
       let currentMediaName = null;
       let savePositionTimer = null;
 
-      const POSITION_COOKIE_NAME = "mediaPlaybackPositions";
+      const POSITION_STORAGE_KEY = "mediaPlaybackPositions";
       const POSITION_SAVE_DELAY_MS = 5000;
+      const POSITION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
       const ts = () => `[${new Date().toISOString()}]`;
 
@@ -255,46 +256,72 @@
       // Drag and drop state
       let draggedIndex = null;
 
-      function getCookie(name) {
-        const match = document.cookie.match(
-          new RegExp("(?:^|; )" + name.replace(/[.$?*|{}()[\]\\/+^]/g, "\\$&") + "=([^;]*)")
-        );
-        return match ? decodeURIComponent(match[1]) : null;
-      }
-
-      function setCookie(name, value, maxAgeSeconds) {
-        document.cookie =
-          `${name}=${encodeURIComponent(value)}; max-age=${maxAgeSeconds}; path=/; SameSite=Lax`;
+      function prunePositionStore(store) {
+        const cutoff = Date.now() - POSITION_TTL_MS;
+        const pruned = {};
+        for (const [filename, entry] of Object.entries(store)) {
+          if (typeof entry === "number") {
+            pruned[filename] = entry;
+            continue;
+          }
+          const updatedAt = entry && entry.updatedAt;
+          // Keep entries without updatedAt (legacy) until they're saved again
+          if (updatedAt == null || updatedAt >= cutoff) {
+            pruned[filename] = entry;
+          }
+        }
+        return pruned;
       }
 
       function readPositionStore() {
         try {
-          const rawCookie = getCookie(POSITION_COOKIE_NAME);
-          const raw = rawCookie || localStorage.getItem(POSITION_COOKIE_NAME) || "{}";
+          const raw = localStorage.getItem(POSITION_STORAGE_KEY) || "{}";
           const parsed = JSON.parse(raw);
-          return parsed && typeof parsed === "object" ? parsed : {};
+          const store = parsed && typeof parsed === "object" ? parsed : {};
+          const pruned = prunePositionStore(store);
+
+          // Persist pruning so expired entries don't linger on disk
+          if (Object.keys(pruned).length !== Object.keys(store).length) {
+            localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(pruned));
+          }
+
+          return pruned;
         } catch (err) {
-          console.warn("Could not read playback-position cookie:", err);
+          console.warn("Could not read playback positions:", err);
           return {};
         }
       }
 
       function writePositionStore(store) {
-        const entries = Object.entries(store)
-          .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0));
-        let prunedStore = Object.fromEntries(entries);
-        let serialized = JSON.stringify(prunedStore);
-
-        // Keep the cookie comfortably under common browser cookie-size limits.
-        while (serialized.length > 3500 && entries.length > 1) {
-          entries.pop();
-          prunedStore = Object.fromEntries(entries);
-          serialized = JSON.stringify(prunedStore);
-        }
-
-        setCookie(POSITION_COOKIE_NAME, serialized, 60 * 60 * 24 * 365);
-        localStorage.setItem(POSITION_COOKIE_NAME, serialized);
+        localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(store));
       }
+
+      function applySavedPositionFromStore(store) {
+        if (!currentMediaName) return;
+
+        const saved = store[currentMediaName];
+        const time = typeof saved === "number" ? saved : saved && saved.time;
+        if (!Number.isFinite(time) || time <= 0) return;
+
+        const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+        if (!player.duration || time >= player.duration - 1) return;
+
+        if (Math.abs(player.currentTime - time) > 2) {
+          player.currentTime = time;
+        }
+      }
+
+      // Sync playback position when another tab updates localStorage
+      window.addEventListener("storage", (e) => {
+        if (e.key !== POSITION_STORAGE_KEY || !e.newValue) return;
+
+        try {
+          const store = prunePositionStore(JSON.parse(e.newValue));
+          applySavedPositionFromStore(store);
+        } catch (err) {
+          console.warn("Could not sync position from other tab:", err);
+        }
+      });
 
       function saveCurrentPositionNow() {
         const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
