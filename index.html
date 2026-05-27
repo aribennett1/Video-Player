@@ -241,6 +241,8 @@
       const POSITION_COOKIE_NAME = "mediaPlaybackPositions";
       const POSITION_SAVE_DELAY_MS = 5000;
 
+      const ts = () => `[${new Date().toISOString()}]`;
+
       // ffmpeg.wasm singleton — loaded lazily on first video file
       let ffmpegInstance = null;
       let ffmpegLoadPromise = null;
@@ -414,12 +416,18 @@
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
 
         ffmpegLoadPromise = (async () => {
+          console.log(ts(), "[ffmpeg] Starting load.",
+            "crossOriginIsolated:", window.crossOriginIsolated,
+            "SharedArrayBuffer:", typeof SharedArrayBuffer !== "undefined",
+            "SW controller:", !!(navigator.serviceWorker && navigator.serviceWorker.controller));
           const { createFFmpeg } = FFmpeg;
           const ff = createFFmpeg({
             corePath: "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
-            log: false,
+            log: true,
           });
+          console.log(ts(), "[ffmpeg] Calling ff.load()...");
           await ff.load();
+          console.log(ts(), "[ffmpeg] ff.load() complete.");
           ffmpegInstance = ff;
           ffmpegLoadPromise = null;
           return ff;
@@ -428,56 +436,104 @@
         return ffmpegLoadPromise;
       }
 
-      // Decode an ArrayBuffer and draw the waveform (shared by audio and video paths)
-      async function drawWaveformFromArrayBuffer(arrayBuffer) {
+      async function decodeAndDrawWaveform(arrayBuffer) {
+        console.log(ts(), "[waveform] decodeAndDrawWaveform. Byte length:", arrayBuffer.byteLength);
         if (audioCtx.state === "suspended") await audioCtx.resume();
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        console.log(ts(), "[waveform] decodeAudioData complete.",
+          "duration:", audioBuffer.duration.toFixed(2) + "s",
+          "channels:", audioBuffer.numberOfChannels,
+          "sampleRate:", audioBuffer.sampleRate);
         drawFullWaveform(audioBuffer);
+        console.log(ts(), "[waveform] drawFullWaveform complete.");
       }
 
-      // Strip a video's audio to a tiny 8kbps/8kHz mono MP3 via ffmpeg.wasm
-      async function extractAudioFromVideo(item) {
+      // Strip video audio to a tiny MP3 via ffmpeg, then draw like any audio file
+      async function extractAudioWithFFmpeg(item) {
+        console.log(ts(), "[ffmpeg] extractAudioWithFFmpeg called.",
+          "file:", item.name, "size:", item.file.size, "type:", item.file.type,
+          "blob URL:", item.url);
+
         const ff = await getFFmpeg();
-        const { fetchFile } = FFmpeg;
+        console.log(ts(), "[ffmpeg] Got ffmpeg instance.");
 
-        const ext = item.file.name.slice(item.file.name.lastIndexOf(".")) || ".mp4";
+        const ext = item.name.includes(".")
+          ? item.name.slice(item.name.lastIndexOf("."))
+          : ".mp4";
         const inputName = `input${ext}`;
+        const mountDir = "/input";
 
-        // Use the blob URL (same source as playback) to avoid iOS File-handle expiry
-        ff.FS("writeFile", inputName, await fetchFile(item.url));
-        await ff.run(
-          "-i", inputName,
-          "-vn",
-          "-ac", "1",
-          "-ar", "8000",
-          "-b:a", "8k",
-          "-f", "mp3",
-          "audio.mp3"
-        );
+        // Read via blob URL (same source the <video> element uses) instead of
+        // File.arrayBuffer(), which iOS Photos can revoke or block for large files.
+        console.log(ts(), "[ffmpeg] Fetching blob from URL...");
+        let blob;
+        try {
+          const response = await fetch(item.url);
+          console.log(ts(), "[ffmpeg] fetch() response ok:", response.ok, "status:", response.status);
+          blob = await response.blob();
+          console.log(ts(), "[ffmpeg] blob() success. Size:", blob.size, "type:", blob.type);
+        } catch (err) {
+          console.error(ts(), "[ffmpeg] fetch(item.url) FAILED:", err);
+          throw err;
+        }
 
-        const data = ff.FS("readFile", "audio.mp3");
-        ff.FS("unlink", inputName);
-        ff.FS("unlink", "audio.mp3");
+        console.log(ts(), "[ffmpeg] Mounting WORKERFS at", mountDir, "as", inputName);
+        ff.FS("mkdir", mountDir);
+        ff.FS("mount", ff.FS.filesystems.WORKERFS, {
+          files: [{ name: inputName, data: blob }],
+        }, mountDir);
 
-        return data.buffer;
+        try {
+          console.log(ts(), "[ffmpeg] Running audio extraction...");
+          await ff.run(
+            "-i", `${mountDir}/${inputName}`,
+            "-vn",
+            "-ac", "1",
+            "-ar", "8000",
+            "-b:a", "8k",
+            "-f", "mp3",
+            "audio.mp3"
+          );
+          console.log(ts(), "[ffmpeg] ff.run() complete.");
+
+          const data = ff.FS("readFile", "audio.mp3");
+          console.log(ts(), "[ffmpeg] Read audio.mp3 from FS. Byte length:", data.byteLength);
+          ff.FS("unlink", "audio.mp3");
+          return data.buffer;
+        } catch (err) {
+          console.error(ts(), "[ffmpeg] extraction FAILED:", err);
+          throw err;
+        } finally {
+          ff.FS("unmount", mountDir);
+          console.log(ts(), "[ffmpeg] WORKERFS unmounted.");
+        }
       }
 
       async function renderWaveformForItem(item) {
         resizeCanvas();
+        console.log(ts(), "[waveform] renderWaveformForItem.",
+          "isAudio:", item.isAudio, "file:", item.name,
+          "crossOriginIsolated:", window.crossOriginIsolated);
 
-        try {
-          let audioArrayBuffer;
-
-          if (item.isAudio) {
-            audioArrayBuffer = await item.file.arrayBuffer();
-          } else {
-            drawWaveformLoadingState("Generating waveform\u2026");
-            audioArrayBuffer = await extractAudioFromVideo(item);
+        if (item.isAudio) {
+          try {
+            console.log(ts(), "[waveform] Fetching audio blob URL...");
+            const arrayBuffer = await fetch(item.url).then((r) => r.arrayBuffer());
+            console.log(ts(), "[waveform] Audio fetch complete. Byte length:", arrayBuffer.byteLength);
+            await decodeAndDrawWaveform(arrayBuffer);
+          } catch (err) {
+            console.warn(ts(), "[waveform] Could not decode audio for waveform:", err);
+            drawFlatFallback();
           }
-
-          await drawWaveformFromArrayBuffer(audioArrayBuffer);
-        } catch (err) {
-          drawFlatFallback();
+        } else {
+          drawWaveformLoadingState("Generating waveform\u2026");
+          try {
+            const audioArrayBuffer = await extractAudioWithFFmpeg(item);
+            await decodeAndDrawWaveform(audioArrayBuffer);
+          } catch (err) {
+            console.warn(ts(), "[waveform] ffmpeg audio extraction failed:", err);
+            drawFlatFallback();
+          }
         }
       }
 
@@ -791,6 +847,10 @@
         files.forEach((file) => {
           const url = URL.createObjectURL(file);
           const isAudio = file.type.startsWith("audio/");
+          console.log(ts(), "[fileInput] Added to queue:",
+            file.name, "size:", file.size, "type:", file.type,
+            "isAudio:", isAudio, "blob URL:", url);
+
           mediaQueue.push({
             file: file,
             url: url,
