@@ -8,7 +8,7 @@
          enabling SharedArrayBuffer which ffmpeg.wasm requires. On first load
          it triggers one automatic page reload to activate the worker. -->
     <script src="coi-serviceworker.js"></script>
-    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    <script src="vendor/ffmpeg/ffmpeg.js"></script>
     <style>
       body {
         background-color: #000;
@@ -243,6 +243,11 @@
 
       const ts = () => `[${new Date().toISOString()}]`;
 
+      // Resolve self-hosted ffmpeg assets (same origin — no CDN / Worker CORS issues)
+      function ffmpegAsset(file) {
+        return new URL(`vendor/ffmpeg/${file}`, document.baseURI || window.location.href).href;
+      }
+
       // ffmpeg.wasm singleton — loaded lazily on first video file
       let ffmpegInstance = null;
       let ffmpegLoadPromise = null;
@@ -410,7 +415,7 @@
         ctx.fillText("Waveform unavailable", 8, 18);
       }
 
-      // Lazy-load the ffmpeg.wasm singleton
+      // Lazy-load ffmpeg.wasm 0.12 (includes WORKERFS for large files)
       async function getFFmpeg() {
         if (ffmpegInstance) return ffmpegInstance;
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
@@ -420,13 +425,21 @@
             "crossOriginIsolated:", window.crossOriginIsolated,
             "SharedArrayBuffer:", typeof SharedArrayBuffer !== "undefined",
             "SW controller:", !!(navigator.serviceWorker && navigator.serviceWorker.controller));
-          const { createFFmpeg } = FFmpeg;
-          const ff = createFFmpeg({
-            corePath: "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
-            log: true,
+
+          const { FFmpeg } = FFmpegWASM;
+          const coreURL = ffmpegAsset("ffmpeg-core.js");
+          const wasmURL = ffmpegAsset("ffmpeg-core.wasm");
+
+          const ff = new FFmpeg();
+          ff.on("log", ({ message }) => console.log(ts(), "[ffmpeg wasm]", message));
+          ff.on("progress", ({ progress, time }) => {
+            if (progress > 0) {
+              console.log(ts(), "[ffmpeg] progress:", Math.round(progress * 100) + "%", "time:", time);
+            }
           });
-          console.log(ts(), "[ffmpeg] Calling ff.load()...");
-          await ff.load();
+
+          console.log(ts(), "[ffmpeg] Calling ff.load()...", { coreURL, wasmURL });
+          await ff.load({ coreURL, wasmURL });
           console.log(ts(), "[ffmpeg] ff.load() complete.");
           ffmpegInstance = ff;
           ffmpegLoadPromise = null;
@@ -448,78 +461,60 @@
         console.log(ts(), "[waveform] drawFullWaveform complete.");
       }
 
-      // Stream a blob URL into ffmpeg MEMFS in chunks (avoids loading multi-GB files at once)
-      async function streamUrlToMemFS(ff, url, destPath, expectedSize) {
-        console.log(ts(), "[ffmpeg] Streaming to MEMFS:", destPath, "expected size:", expectedSize);
-        const response = await fetch(url);
-        console.log(ts(), "[ffmpeg] fetch() ok:", response.ok, "status:", response.status);
-        if (!response.ok || !response.body) {
-          throw new Error(`fetch failed: ${response.status}`);
-        }
-
-        const reader = response.body.getReader();
-        const fd = ff.FS("open", destPath, "w+");
-        let offset = 0;
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            ff.FS("write", fd, value, 0, value.length, offset);
-            const prevMb = Math.floor(offset / (64 * 1024 * 1024));
-            offset += value.length;
-            const currMb = Math.floor(offset / (64 * 1024 * 1024));
-            if (currMb > prevMb) {
-              console.log(ts(), "[ffmpeg] Streamed", offset, "/", expectedSize || "?", "bytes");
-            }
-          }
-        } finally {
-          ff.FS("close", fd);
-        }
-
-        console.log(ts(), "[ffmpeg] Stream complete. Total bytes:", offset);
-        return offset;
+      function safeFfmpegInputName(originalName) {
+        const ext = originalName.includes(".")
+          ? originalName.slice(originalName.lastIndexOf("."))
+          : ".mp4";
+        return "input" + ext.replace(/[^a-zA-Z0-9.]/g, "");
       }
 
-      // Strip video audio to a tiny MP3 via ffmpeg, then draw like any audio file
+      // Mount video via WORKERFS (reads File in chunks — no multi-GB MEMFS copy),
+      // extract a tiny audio track, then draw with the same path as audio files.
       async function extractAudioWithFFmpeg(item) {
         console.log(ts(), "[ffmpeg] extractAudioWithFFmpeg called.",
-          "file:", item.name, "size:", item.file.size, "type:", item.file.type,
-          "blob URL:", item.url);
+          "file:", item.name, "size:", item.file.size, "type:", item.file.type);
 
         const ff = await getFFmpeg();
         console.log(ts(), "[ffmpeg] Got ffmpeg instance.");
 
-        const ext = item.name.includes(".")
-          ? item.name.slice(item.name.lastIndexOf("."))
-          : ".mp4";
-        const inputName = `input${ext}`;
+        const mountDir = "/input";
+        const inputName = safeFfmpegInputName(item.name);
+        const inputPath = `${mountDir}/${inputName}`;
+        const outputName = "audio.mp3";
+
+        // WORKERFS reads the File via blob.slice() — never copies the whole video into RAM
+        const inputFile = item.file.name === inputName
+          ? item.file
+          : new File([item.file], inputName, { type: item.file.type });
+
+        console.log(ts(), "[ffmpeg] Mounting WORKERFS at", mountDir, "as", inputName);
+        await ff.createDir(mountDir);
+        await ff.mount("WORKERFS", { files: [inputFile] }, mountDir);
 
         try {
-          await streamUrlToMemFS(ff, item.url, inputName, item.file.size);
-
-          console.log(ts(), "[ffmpeg] Running audio extraction...");
-          await ff.run(
-            "-i", inputName,
+          console.log(ts(), "[ffmpeg] Running audio extraction (8kHz mono MP3)...");
+          await ff.exec([
+            "-i", inputPath,
             "-vn",
             "-ac", "1",
             "-ar", "8000",
             "-b:a", "8k",
             "-f", "mp3",
-            "audio.mp3"
-          );
-          console.log(ts(), "[ffmpeg] ff.run() complete.");
+            outputName,
+          ]);
+          console.log(ts(), "[ffmpeg] ff.exec() complete.");
 
-          const data = ff.FS("readFile", "audio.mp3");
-          console.log(ts(), "[ffmpeg] Read audio.mp3 from FS. Byte length:", data.byteLength);
-          ff.FS("unlink", "audio.mp3");
-          return data.buffer;
+          const data = await ff.readFile(outputName);
+          console.log(ts(), "[ffmpeg] Read", outputName, "Byte length:", data.byteLength);
+          await ff.deleteFile(outputName);
+          return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
         } catch (err) {
           console.error(ts(), "[ffmpeg] extraction FAILED:", err);
           throw err;
         } finally {
-          try { ff.FS("unlink", inputName); } catch (_) {}
-          console.log(ts(), "[ffmpeg] Cleaned up input file from MEMFS.");
+          await ff.unmount(mountDir);
+          await ff.deleteDir(mountDir);
+          console.log(ts(), "[ffmpeg] WORKERFS unmounted.");
         }
       }
 

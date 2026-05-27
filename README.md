@@ -108,13 +108,15 @@ Positions are stored as JSON keyed by filename in both a cookie (`max-age` 1 yea
 
 | Library | Version | Purpose |
 |---|---|---|
-| `@ffmpeg/ffmpeg` | 0.11.6 | ffmpeg.wasm browser wrapper (inline blob worker — no cross-origin worker issue) |
-| `@ffmpeg/core` | 0.11.0 | Single-threaded wasm core |
-| `coi-serviceworker` | — | Bundled in repo; injects COOP/COEP headers via service worker to enable `SharedArrayBuffer` on GitHub Pages |
+| `@ffmpeg/ffmpeg` | 0.12.10 | Self-hosted in `vendor/ffmpeg/` (`ffmpeg.js`, `814.ffmpeg.js`) |
+| `@ffmpeg/core` | 0.12.6 | Self-hosted in `vendor/ffmpeg/` (`ffmpeg-core.js`, `ffmpeg-core.wasm`) |
+| `coi-serviceworker` | — | Bundled in repo; enables `SharedArrayBuffer` on GitHub Pages |
 
-> **First-load note:** On first visit (or after clearing site data), `coi-serviceworker` triggers one automatic page reload to install the service worker. Subsequent loads are instant.
+All ffmpeg.wasm files are **self-hosted** from `vendor/ffmpeg/` so Workers load same-origin on GitHub Pages (no unpkg / cross-origin Worker errors).
 
-Loaded from [unpkg.com](https://unpkg.com) CDN. No build step or npm install required.
+> **Large video files:** Video is mounted via **WORKERFS** so ffmpeg reads the file in chunks without copying the entire video into memory. Audio is extracted to a tiny 8kHz mono MP3, then decoded with Web Audio API for the waveform.
+
+No build step or npm install required — ffmpeg binaries are committed in `vendor/ffmpeg/`.
 
 ## License
 
