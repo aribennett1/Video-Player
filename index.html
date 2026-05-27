@@ -463,24 +463,13 @@
         const inputName = `input${ext}`;
         const mountDir = "/input";
 
-        // Read via blob URL (same source the <video> element uses) instead of
-        // File.arrayBuffer(), which iOS Photos can revoke or block for large files.
-        console.log(ts(), "[ffmpeg] Fetching blob from URL...");
-        let blob;
-        try {
-          const response = await fetch(item.url);
-          console.log(ts(), "[ffmpeg] fetch() response ok:", response.ok, "status:", response.status);
-          blob = await response.blob();
-          console.log(ts(), "[ffmpeg] blob() success. Size:", blob.size, "type:", blob.type);
-        } catch (err) {
-          console.error(ts(), "[ffmpeg] fetch(item.url) FAILED:", err);
-          throw err;
-        }
-
-        console.log(ts(), "[ffmpeg] Mounting WORKERFS at", mountDir, "as", inputName);
+        // Mount the File directly in WORKERFS — ffmpeg reads it in chunks without
+        // loading the whole video into JS memory (fetch().blob() fails on ~2.8GB files).
+        console.log(ts(), "[ffmpeg] Mounting File in WORKERFS (streaming reads)...",
+          "file size:", item.file.size);
         ff.FS("mkdir", mountDir);
         ff.FS("mount", ff.FS.filesystems.WORKERFS, {
-          files: [{ name: inputName, data: blob }],
+          files: [{ name: inputName, data: item.file }],
         }, mountDir);
 
         try {
