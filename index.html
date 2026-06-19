@@ -148,12 +148,52 @@
         font-weight: bold;
       }
 
-      .queue-item-name {
+      .queue-item-name-wrapper {
+        position: relative;
         flex: 1;
+        min-width: 0;
+        margin-right: 10px;
+      }
+
+      .queue-item-name {
+        display: block;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        margin-right: 10px;
+      }
+
+      .queue-item-popover {
+        visibility: hidden;
+        opacity: 0;
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 0;
+        max-width: min(420px, 90vw);
+        padding: 8px 12px;
+        background: #111;
+        color: #fff;
+        border: 1px solid #555;
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+        font-size: 13px;
+        font-weight: normal;
+        line-height: 1.4;
+        white-space: normal;
+        word-break: break-word;
+        z-index: 20;
+        pointer-events: none;
+        transition: opacity 0.15s ease, visibility 0.15s ease;
+      }
+
+      .queue-item:not(.dragging):hover .queue-item-popover {
+        visibility: visible;
+        opacity: 1;
+      }
+
+      .queue-item.playing .queue-item-popover {
+        background: #000;
+        color: #fff;
+        border-color: #333;
       }
 
       .queue-item button {
@@ -622,9 +662,20 @@
           li.draggable = true;
           li.dataset.index = index;
 
+          const nameWrapper = document.createElement("span");
+          nameWrapper.className = "queue-item-name-wrapper";
+
           const nameSpan = document.createElement("span");
           nameSpan.className = "queue-item-name";
           nameSpan.textContent = item.name;
+
+          const popover = document.createElement("span");
+          popover.className = "queue-item-popover";
+          popover.setAttribute("role", "tooltip");
+          popover.textContent = item.name;
+
+          nameWrapper.appendChild(nameSpan);
+          nameWrapper.appendChild(popover);
 
           const removeBtn = document.createElement("button");
           removeBtn.textContent = "Remove";
@@ -642,7 +693,7 @@
             playQueueItem(index);
           });
 
-          li.appendChild(nameSpan);
+          li.appendChild(nameWrapper);
           li.appendChild(removeBtn);
           queueList.appendChild(li);
         });

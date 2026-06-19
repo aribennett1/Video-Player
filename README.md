@@ -45,6 +45,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 - **Remove from Queue**: Click the "Remove" button to remove a file — also clears its saved position
 - **Dynamic Queue**: Add more files at any time without interrupting playback
 - **Currently Playing Indicator**: Active file is highlighted in blue
+- **Full Name on Hover**: Hover a queue item to see the complete filename in a popover (useful when names are truncated)
 
 ### 💾 Playback Position Memory
 
@@ -65,6 +66,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 ### Managing the Queue
 
 - **View Queue**: All queued files are displayed below the controls
+- **Full Filename**: Hover over any queue item to reveal the full filename in a popover
 - **Jump to File**: Double-click any item to play it immediately
 - **Reorder**: Drag and drop items to change play order
 - **Remove**: Click "Remove" to remove a file and clear its saved position
