@@ -809,6 +809,7 @@
         // Load media and restore any cookie-saved playback position for this filename.
         const player = await loadMedia(item.url, item.isAudio, item.name);
 
+        updateMediaSession();
         await renderWaveformForItem(item);
       }
 
@@ -818,6 +819,46 @@
           playQueueItem(currentQueueIndex + 1);
         }
       }
+
+      // Play previous in queue
+      function playPrevious() {
+        if (currentQueueIndex > 0) {
+          playQueueItem(currentQueueIndex - 1);
+        }
+      }
+
+      function updateMediaSession() {
+        if (!("mediaSession" in navigator)) return;
+
+        const item =
+          currentQueueIndex >= 0 ? mediaQueue[currentQueueIndex] : null;
+        if (!item) {
+          navigator.mediaSession.metadata = null;
+          return;
+        }
+
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: item.name,
+        });
+
+        const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+        navigator.mediaSession.playbackState = player.paused
+          ? "paused"
+          : "playing";
+      }
+
+      function setupMediaSession() {
+        if (!("mediaSession" in navigator)) return;
+
+        navigator.mediaSession.setActionHandler("nexttrack", () => {
+          playNext();
+        });
+        navigator.mediaSession.setActionHandler("previoustrack", () => {
+          playPrevious();
+        });
+      }
+
+      setupMediaSession();
 
       // Just load/play media; no realtime analyzer
       function loadMedia(url, isAudio, fileName) {
@@ -858,7 +899,11 @@
 
       [videoPlayer, audioPlayer].forEach((player) => {
         player.addEventListener("timeupdate", schedulePositionSave);
-        player.addEventListener("pause", saveCurrentPositionNow);
+        player.addEventListener("pause", () => {
+          saveCurrentPositionNow();
+          updateMediaSession();
+        });
+        player.addEventListener("play", updateMediaSession);
         player.addEventListener("seeked", saveCurrentPositionNow);
       });
       window.addEventListener("beforeunload", saveCurrentPositionNow);
@@ -875,8 +920,28 @@
         }, 0);
       });
       
+      function handleQueueSkipKey(e) {
+        if (e.key === "MediaTrackNext") {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          playNext();
+          return true;
+        }
+        if (e.key === "MediaTrackPrevious") {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          playPrevious();
+          return true;
+        }
+        return false;
+      }
+
       // Try window-level capture as absolute first line of defense
       window.addEventListener("keydown", function(e) {
+        if (handleQueueSkipKey(e)) return false;
+
         if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
           const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
           
@@ -901,6 +966,8 @@
 
       // Also add document-level capture to block any browser defaults
       document.addEventListener("keydown", function(e) {
+        if (handleQueueSkipKey(e)) return;
+
         if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
           const activeElement = document.activeElement;
           const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
@@ -1019,6 +1086,14 @@
             e.preventDefault();
             if (player.paused) player.play();
             else player.pause();
+            break;
+          case "MediaTrackNext":
+            e.preventDefault();
+            playNext();
+            break;
+          case "MediaTrackPrevious":
+            e.preventDefault();
+            playPrevious();
             break;
           default:
             return;
