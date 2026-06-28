@@ -408,7 +408,7 @@
 
       function getQueueItemPopoverText(item) {
         if (Number.isFinite(item.duration) && item.duration > 0) {
-          return `${item.name} ${formatDuration(item.duration)}`;
+          return `${item.name} (${formatDuration(item.duration)})`;
         }
         return item.name;
       }
