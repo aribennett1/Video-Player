@@ -390,6 +390,47 @@
         return Number.isFinite(time) && time > 0 ? time : 0;
       }
 
+      function getStoredDuration(filename) {
+        const saved = readPositionStore()[filename];
+        const duration =
+          typeof saved === "object" && saved ? saved.duration : null;
+        return Number.isFinite(duration) && duration > 0 ? duration : null;
+      }
+
+      function formatDuration(totalSeconds) {
+        if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return "";
+        const seconds = Math.floor(totalSeconds);
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
+      }
+
+      function getQueueItemPopoverText(item) {
+        if (Number.isFinite(item.duration) && item.duration > 0) {
+          return `${item.name} ${formatDuration(item.duration)}`;
+        }
+        return item.name;
+      }
+
+      function probeMediaDuration(url, isAudio) {
+        return new Promise((resolve) => {
+          const el = document.createElement(isAudio ? "audio" : "video");
+          el.preload = "metadata";
+          const cleanup = () => el.remove();
+          el.onloadedmetadata = () => {
+            const duration = el.duration;
+            cleanup();
+            resolve(Number.isFinite(duration) ? duration : null);
+          };
+          el.onerror = () => {
+            cleanup();
+            resolve(null);
+          };
+          el.src = url;
+        });
+      }
+
       // Ensure canvas drawing size matches its CSS size
       function resizeCanvas() {
         const rect = canvas.getBoundingClientRect();
@@ -672,7 +713,7 @@
           const popover = document.createElement("span");
           popover.className = "queue-item-popover";
           popover.setAttribute("role", "tooltip");
-          popover.textContent = item.name;
+          popover.textContent = getQueueItemPopoverText(item);
 
           nameWrapper.appendChild(nameSpan);
           nameWrapper.appendChild(popover);
@@ -881,6 +922,16 @@
               player.currentTime = savedTime;
             }
 
+            const queueIndex = mediaQueue.findIndex((q) => q.name === fileName);
+            if (
+              queueIndex >= 0 &&
+              Number.isFinite(player.duration) &&
+              player.duration > 0
+            ) {
+              mediaQueue[queueIndex].duration = player.duration;
+              updateQueueDisplay();
+            }
+
             player.focus(); // Focus so arrow keys work
             resolve(player);
           };
@@ -1005,12 +1056,27 @@
             file.name, "size:", file.size, "type:", file.type,
             "isAudio:", isAudio, "blob URL:", url);
 
-          mediaQueue.push({
+          const queueItem = {
             file: file,
             url: url,
             isAudio: isAudio,
             name: file.name,
-          });
+            duration: getStoredDuration(file.name),
+          };
+          mediaQueue.push(queueItem);
+
+          const queueIndex = mediaQueue.length - 1;
+          if (queueItem.duration == null) {
+            probeMediaDuration(url, isAudio).then((duration) => {
+              if (
+                duration != null &&
+                mediaQueue[queueIndex]?.url === url
+              ) {
+                mediaQueue[queueIndex].duration = duration;
+                updateQueueDisplay();
+              }
+            });
+          }
         });
 
         updateQueueDisplay();
