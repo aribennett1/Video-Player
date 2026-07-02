@@ -6,8 +6,8 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 
 ### 🎵 Universal Media Support
 
-- **Video Playback**: Supports all browser-compatible video formats (MP4, WebM, MKV, MOV, etc.)
-- **Audio Playback**: Supports all browser-compatible audio formats (MP3, WAV, OGG, AAC, etc.)
+- **Video Playback**: Supports all browser-compatible video formats (MP4, WebM, MKV, MOV, 3GP, etc.)
+- **Audio Playback**: Supports all browser-compatible audio formats (MP3, WAV, OGG, AAC, 3GP/3GPP, etc.)
 - Automatic format detection and appropriate player selection
 
 ### ⚡ Speed Control

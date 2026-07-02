@@ -233,7 +233,12 @@
         <canvas id="progressOverlay"></canvas>
       </div>
 
-      <input type="file" id="fileInput" accept="video/*,audio/*" multiple />
+      <input
+        type="file"
+        id="fileInput"
+        accept="video/*,audio/*,.3gp,.3gpp,.3g2,audio/3gpp,video/3gpp,audio/3gpp2,video/3gpp2"
+        multiple
+      />
 
       <div class="controls">
         <label for="speedControl">Speed:</label>
@@ -1048,16 +1053,36 @@
         return Array.from(e.dataTransfer?.types || []).includes("Files");
       }
 
-      function addFilesToQueue(files, sourceLabel) {
-        const mediaFiles = files.filter((file) =>
-          file.type.startsWith("audio/") || file.type.startsWith("video/")
+      const supportedMediaExtensions = new Set([".3gp", ".3gpp", ".3g2"]);
+      const audioFallbackExtensions = new Set([".3gp", ".3gpp", ".3g2"]);
+
+      function getFileExtension(fileName) {
+        const dotIndex = fileName.lastIndexOf(".");
+        return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : "";
+      }
+
+      function isSupportedMediaFile(file) {
+        return (
+          file.type.startsWith("audio/") ||
+          file.type.startsWith("video/") ||
+          supportedMediaExtensions.has(getFileExtension(file.name))
         );
+      }
+
+      function shouldUseAudioPlayer(file) {
+        if (file.type.startsWith("audio/")) return true;
+        if (file.type.startsWith("video/")) return false;
+        return audioFallbackExtensions.has(getFileExtension(file.name));
+      }
+
+      function addFilesToQueue(files, sourceLabel) {
+        const mediaFiles = files.filter(isSupportedMediaFile);
         if (mediaFiles.length === 0) return;
 
         // Add files to queue
         mediaFiles.forEach((file) => {
           const url = URL.createObjectURL(file);
-          const isAudio = file.type.startsWith("audio/");
+          const isAudio = shouldUseAudioPlayer(file);
           console.log(ts(), `[${sourceLabel}] Added to queue:`,
             file.name, "size:", file.size, "type:", file.type,
             "isAudio:", isAudio, "blob URL:", url);
