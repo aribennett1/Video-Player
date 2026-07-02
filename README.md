@@ -39,6 +39,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 ### 📋 Queue System
 
 - **Multiple File Selection**: Select multiple audio/video files at once (hold Ctrl/Cmd or Shift)
+- **Page Drop Uploads**: Drag and drop audio/video files onto the page to add them to the queue
 - **Sequential Playback**: Automatically plays the next file when the current one ends
 - **Double-Click to Jump**: Double-click any queue item to start playing it immediately; queue continues from that point
 - **Drag & Drop Reordering**: Drag any queue item to reorder the playlist
@@ -59,7 +60,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 ### Getting Started
 
 1. Open `index.html` in any modern web browser
-2. Click "Choose File" to select one or more audio or video files
+2. Click "Choose File" to select one or more audio or video files, or drag and drop files onto the page
 3. Playback begins automatically and the waveform is generated
 4. If you loaded a video, the waveform generates in the background via ffmpeg.wasm (first load requires a ~30MB one-time download, cached after that)
 
@@ -70,7 +71,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 - **Jump to File**: Double-click any item to play it immediately
 - **Reorder**: Drag and drop items to change play order
 - **Remove**: Click "Remove" to remove a file and clear its saved position
-- **Add More**: Select additional files at any time to append them to the queue
+- **Add More**: Select additional files or drop them onto the page at any time to append them to the queue
 
 ### Controlling Playback
 
