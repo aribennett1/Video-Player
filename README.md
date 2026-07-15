@@ -41,6 +41,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 - **Multiple File Selection**: Select multiple audio/video files at once (hold Ctrl/Cmd or Shift)
 - **Page Drop Uploads**: Drag and drop audio/video files onto the page to add them to the queue
 - **Sequential Playback**: Automatically plays the next file when the current one ends
+- **Repeat Modes**: Click the repeat button once to repeat the playlist, twice to repeat the current track, and a third time to turn repeat off
 - **Double-Click to Jump**: Double-click any queue item to start playing it immediately; queue continues from that point
 - **Drag & Drop Reordering**: Drag any queue item to reorder the playlist
 - **Remove from Queue**: Click the "Remove" button to remove a file — also clears its saved position
@@ -79,6 +80,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 - **Seek**: Click the waveform, or use the native scrubber
 - **Skip 2 seconds**: Arrow keys (works even after manually seeking)
 - **Speed**: Number input field or `D`/`S` keys
+- **Repeat**: Button cycles through playlist repeat, track repeat, and off
 
 ## Technical Details
 

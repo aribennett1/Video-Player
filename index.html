@@ -39,6 +39,53 @@
         background-color: #000;
       }
 
+      .file-control-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        margin-top: 20px;
+        width: 100%;
+      }
+
+      .repeat-button {
+        display: grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        padding: 0;
+        background: #222;
+        color: rgba(255, 255, 255, 0.72);
+        border: 1px solid #555;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .repeat-button:hover {
+        background: #333;
+        color: #fff;
+      }
+
+      .repeat-button.active {
+        color: #35e86f;
+        border-color: #35e86f;
+      }
+
+      .repeat-button svg {
+        width: 27px;
+        height: 27px;
+      }
+
+      .repeat-one-marker,
+      .repeat-active-dot {
+        display: none;
+      }
+
+      .repeat-button.active .repeat-active-dot,
+      .repeat-button[data-repeat-mode="track"] .repeat-one-marker {
+        display: block;
+      }
+
       .waveform-container {
         position: relative;
         width: 100%;
@@ -62,7 +109,6 @@
         pointer-events: none;
       }
 
-      input[type="file"],
       .controls {
         margin-top: 20px;
         width: 100%;
@@ -71,8 +117,15 @@
       .controls {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
+        gap: 12px;
         margin-top: 10px;
+      }
+
+      .speed-control {
+        display: flex;
+        align-items: center;
+        min-width: 0;
       }
 
       .controls label {
@@ -91,6 +144,8 @@
       }
 
       input[type="file"] {
+        width: 100%;
+        box-sizing: border-box;
         background: #222;
         color: #fff;
         border: 1px solid #555;
@@ -233,23 +288,61 @@
         <canvas id="progressOverlay"></canvas>
       </div>
 
-      <input
-        type="file"
-        id="fileInput"
-        accept="video/*,audio/*,.3gp,.3gpp,.3g2,audio/3gpp,video/3gpp,audio/3gpp2,video/3gpp2"
-        multiple
-      />
+      <div class="file-control-row">
+        <input
+          type="file"
+          id="fileInput"
+          accept="video/*,audio/*,.3gp,.3gpp,.3g2,audio/3gpp,video/3gpp,audio/3gpp2,video/3gpp2"
+          multiple
+        />
+        <button
+          type="button"
+          id="repeatButton"
+          class="repeat-button"
+          aria-pressed="false"
+          aria-label="Repeat is off"
+          title="Repeat is off"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="m17 2 4 4-4 4" />
+            <path d="M3 11V9a3 3 0 0 1 3-3h15" />
+            <path d="m7 22-4-4 4-4" />
+            <path d="M21 13v2a3 3 0 0 1-3 3H3" />
+            <text
+              class="repeat-one-marker"
+              x="12"
+              y="15"
+              fill="currentColor"
+              stroke="none"
+              text-anchor="middle"
+              font-size="8"
+              font-weight="700"
+            >1</text>
+            <circle class="repeat-active-dot" cx="12" cy="22" r="1.8" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
+      </div>
 
       <div class="controls">
-        <label for="speedControl">Speed:</label>
-        <input
-          type="number"
-          id="speedControl"
-          min="0.1"
-          max="100"
-          step="0.1"
-          value="1.0"
-        />
+        <div class="speed-control">
+          <label for="speedControl">Speed:</label>
+          <input
+            type="number"
+            id="speedControl"
+            min="0.1"
+            max="100"
+            step="0.1"
+            value="1.0"
+          />
+        </div>
       </div>
 
       <div class="queue-container">
@@ -267,6 +360,7 @@
       const videoPlayer = document.getElementById("videoPlayer");
       const audioPlayer = document.getElementById("audioPlayer");
       const speedControl = document.getElementById("speedControl");
+      const repeatButton = document.getElementById("repeatButton");
       const canvas = document.getElementById("waveform");
       const ctx = canvas.getContext("2d");
       const progressCanvas = document.getElementById("progressOverlay");
@@ -282,10 +376,22 @@
       let currentPlaybackSpeed = 1.0;
       let currentMediaName = null;
       let savePositionTimer = null;
+      let repeatMode = "none";
 
       const POSITION_STORAGE_KEY = "mediaPlaybackPositions";
       const POSITION_SAVE_DELAY_MS = 5000;
       const POSITION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+      const REPEAT_MODES = ["none", "playlist", "track"];
+      const REPEAT_LABELS = {
+        none: "Repeat is off",
+        playlist: "Repeat playlist",
+        track: "Repeat current track",
+      };
+      const REPEAT_TITLES = {
+        none: "Repeat is off",
+        playlist: "Repeating playlist",
+        track: "Repeating current track",
+      };
 
       const ts = () => `[${new Date().toISOString()}]`;
 
@@ -863,6 +969,8 @@
       function playNext() {
         if (currentQueueIndex < mediaQueue.length - 1) {
           playQueueItem(currentQueueIndex + 1);
+        } else if (repeatMode === "playlist" && mediaQueue.length > 0) {
+          playQueueItem(0);
         }
       }
 
@@ -905,6 +1013,43 @@
       }
 
       setupMediaSession();
+
+      function updateRepeatButton() {
+        const isActive = repeatMode !== "none";
+        repeatButton.dataset.repeatMode = repeatMode;
+        repeatButton.classList.toggle("active", isActive);
+        repeatButton.setAttribute("aria-pressed", String(isActive));
+        repeatButton.setAttribute("aria-label", REPEAT_LABELS[repeatMode]);
+        repeatButton.title = REPEAT_TITLES[repeatMode];
+      }
+
+      function cycleRepeatMode() {
+        const currentIndex = REPEAT_MODES.indexOf(repeatMode);
+        repeatMode = REPEAT_MODES[(currentIndex + 1) % REPEAT_MODES.length];
+        updateRepeatButton();
+      }
+
+      function replayCurrentTrack() {
+        const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
+        if (!player.src) return;
+
+        player.currentTime = 0;
+        player.play().catch((err) => {
+          console.warn("Repeat playback blocked by browser:", err);
+        });
+      }
+
+      function handleMediaEnded() {
+        if (repeatMode === "track") {
+          replayCurrentTrack();
+          return;
+        }
+
+        playNext();
+      }
+
+      repeatButton.addEventListener("click", cycleRepeatMode);
+      updateRepeatButton();
 
       // Just load/play media; no realtime analyzer
       function loadMedia(url, isAudio, fileName) {
@@ -949,9 +1094,9 @@
         });
       }
 
-      // Handle media ended event to play next in queue
-      videoPlayer.addEventListener("ended", playNext);
-      audioPlayer.addEventListener("ended", playNext);
+      // Handle media ended event based on repeat mode
+      videoPlayer.addEventListener("ended", handleMediaEnded);
+      audioPlayer.addEventListener("ended", handleMediaEnded);
 
       [videoPlayer, audioPlayer].forEach((player) => {
         player.addEventListener("timeupdate", schedulePositionSave);
