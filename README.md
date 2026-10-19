@@ -63,7 +63,17 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 1. Open `index.html` in any modern web browser
 2. Click "Choose File" to select one or more audio or video files, or drag and drop files onto the page
 3. Playback begins automatically and the waveform is generated
-4. If you loaded a video, the waveform generates in the background via ffmpeg.wasm (first load requires a ~30MB one-time download, cached after that)
+4. If you loaded a video, the waveform generates in the background via ffmpeg.wasm
+
+### Live Website with Offline Fallback
+
+When served over HTTPS (or localhost), the player saves the page and all FFmpeg files for offline use. Keep the first visit open while the initial ~30MB download finishes. Opening `index.html` directly as a local file does not enable offline website caching.
+
+Subsequent requests try the live website first and refresh the saved copy when successful. If the connection fails, the server returns an error, or a request takes longer than eight seconds, the player uses its cached copy when available. Both the site root and `index.html` use the same saved page.
+
+Once the service worker has installed successfully, you can reopen the same URL offline and select local audio or video files, including generating video waveforms. Media files and the queue are not saved by the website cache; select your files again after reopening. Clearing browser site data also clears the offline copy.
+
+To check: visit the hosted site online, wait for the service worker to activate, then disconnect from the network and reload the same URL. Reconnect and reload to use the live site again.
 
 ### Managing the Queue
 
