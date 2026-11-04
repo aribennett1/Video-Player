@@ -201,6 +201,45 @@
         color: #4a9eff;
       }
 
+      .queue-actions {
+        display: flex;
+        align-items: center;
+        gap: 0;
+      }
+
+      .reverse-queue-button {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: var(--top-control-height);
+        padding: 5px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: #4a9eff;
+        cursor: pointer;
+      }
+
+      .reverse-queue-button svg {
+        width: 18px;
+        height: 18px;
+      }
+
+      .reverse-queue-button:hover:enabled {
+        background: #333;
+        color: #fff;
+      }
+
+      .reverse-queue-button:focus-visible {
+        outline: 2px solid #4a9eff;
+        outline-offset: 2px;
+      }
+
+      .reverse-queue-button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
       .queue-list {
         list-style: none;
         padding: 0;
@@ -339,7 +378,23 @@
         title="Click to choose files"
       >
         <div class="queue-control-row">
-          <h3>Queue</h3>
+          <div class="queue-actions">
+            <h3>Queue</h3>
+            <button
+              type="button"
+              id="reverseQueueButton"
+              class="reverse-queue-button"
+              aria-label="Reverse queue order"
+              title="Reverse queue order"
+              disabled
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                aria-hidden="true">
+                <path d="M8 20V4m-4 4 4-4 4 4M16 4v16m-4-4 4 4 4-4" />
+              </svg>
+            </button>
+          </div>
           <div class="queue-controls">
             <div class="speed-control">
               <label for="speedControl">Speed:</label>
@@ -408,6 +463,7 @@
       const progressCtx = progressCanvas.getContext("2d");
       const queueContainer = document.getElementById("queueContainer");
       const queueList = document.getElementById("queueList");
+      const reverseQueueButton = document.getElementById("reverseQueueButton");
 
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -841,6 +897,7 @@
 
       // Update queue display
       function updateQueueDisplay() {
+        reverseQueueButton.disabled = mediaQueue.length < 2;
         queueList.innerHTML = "";
 
         if (mediaQueue.length === 0) {
@@ -1287,14 +1344,13 @@
           };
           mediaQueue.push(queueItem);
 
-          const queueIndex = mediaQueue.length - 1;
           if (queueItem.duration == null) {
             probeMediaDuration(url, isAudio).then((duration) => {
               if (
                 duration != null &&
-                mediaQueue[queueIndex]?.url === url
+                mediaQueue.includes(queueItem)
               ) {
-                mediaQueue[queueIndex].duration = duration;
+                queueItem.duration = duration;
                 updateQueueDisplay();
               }
             });
@@ -1319,7 +1375,17 @@
         this.value = "";
       });
 
+      reverseQueueButton.addEventListener("click", function () {
+        if (mediaQueue.length < 2) return;
+        mediaQueue.reverse();
+        if (currentQueueIndex >= 0) {
+          currentQueueIndex = mediaQueue.length - 1 - currentQueueIndex;
+        }
+        updateQueueDisplay();
+      });
+
       queueContainer.addEventListener("click", function (e) {
+        if (e.target.closest(".queue-actions")) return;
         if (e.target.closest(".queue-item")) return;
         if (e.target.closest(".queue-controls")) return;
         fileInput.click();
