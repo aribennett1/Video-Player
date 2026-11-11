@@ -1378,10 +1378,7 @@
       reverseQueueButton.addEventListener("click", function () {
         if (mediaQueue.length < 2) return;
         mediaQueue.reverse();
-        if (currentQueueIndex >= 0) {
-          currentQueueIndex = mediaQueue.length - 1 - currentQueueIndex;
-        }
-        updateQueueDisplay();
+        playQueueItem(0);
       });
 
       queueContainer.addEventListener("click", function (e) {

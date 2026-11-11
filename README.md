@@ -81,7 +81,7 @@ To check: visit the hosted site online, wait for the service worker to activate,
 - **Full Filename**: Hover over any queue item to reveal the full filename in a popover
 - **Jump to File**: Double-click any item to play it immediately
 - **Reorder**: Drag and drop items to change play order
-- **Reverse Order**: Click the opposing arrows beside “Queue” to reverse the queue in one click. The current file keeps playing at its current position.
+- **Reverse Order**: Click the opposing arrows beside “Queue” to reverse the queue and start playing the new first file.
 - **Remove**: Click "Remove" to remove a file and clear its saved position
 - **Add More**: Select additional files or drop them onto the page at any time to append them to the queue
 
