@@ -719,33 +719,8 @@
         localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(store));
       }
 
-      function applySavedPositionFromStore(store) {
-        if (!currentMediaName) return;
-
-        const saved = store[currentMediaName];
-        const time = typeof saved === "number" ? saved : saved && saved.time;
-        if (!Number.isFinite(time) || time <= 0) return;
-
-        const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
-        if (!player.duration || time >= player.duration - 1) return;
-
-        if (Math.abs(player.currentTime - time) > 2) {
-          player.currentTime = time;
-        }
-      }
-
-      // Sync playback position when another tab updates localStorage
-      window.addEventListener("storage", (e) => {
-        if (e.key !== POSITION_STORAGE_KEY || !e.newValue) return;
-
-        try {
-          const store = prunePositionStore(JSON.parse(e.newValue));
-          applySavedPositionFromStore(store);
-        } catch (err) {
-          console.warn("Could not sync position from other tab:", err);
-        }
-      });
-
+      // Saved positions are read when loading media only. Other tabs may save
+      // their own progress, but must never seek this tab's active player.
       function saveCurrentPositionNow() {
         const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
         if (!currentMediaName || !player.duration || isNaN(player.duration)) return;

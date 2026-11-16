@@ -52,7 +52,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 ### 💾 Playback Position Memory
 
 - **Persistent Resume**: The timestamp you were at is saved per filename and restored when you reload the same file
-- **Cross-Tab**: Positions are stored in `localStorage` and sync across tabs via the `storage` event
+- **Independent Tabs**: Saving progress never seeks playback in another tab. Future loads use the most recently saved position.
 - **Auto-Expiry**: Entries not updated in 7+ days are pruned automatically on read
 - **Clear on Remove**: Removing a file from the queue deletes its saved position
 
@@ -118,7 +118,7 @@ Browsers' native media controls handle arrow keys at a lower level than JavaScri
 
 ### Playback Position Storage
 
-Positions are stored as JSON keyed by filename in `localStorage`. On read, entries with an `updatedAt` older than 7 days are pruned. Other tabs receive updates via the browser `storage` event and apply the saved seek position for the currently playing file.
+Positions are stored as JSON keyed by filename in `localStorage`. On read, entries with an `updatedAt` older than 7 days are pruned. Saved positions are applied only when loading a file. Updates from other tabs never seek an already loaded recording, including while paused. Tabs share the resume store, so a future load uses whichever position was saved most recently.
 
 ## Browser Compatibility
 
