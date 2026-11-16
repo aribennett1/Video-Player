@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const script = fs.readFileSync(`${__dirname}/../index.html`, 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+const script = fs.readFileSync(`${__dirname}/../position-store.js`, 'utf8') + '\n' + fs.readFileSync(`${__dirname}/../app.js`, 'utf8');
 function tab(storage) {
   const listeners = new Map();
   const elements = new Map();
@@ -55,5 +55,27 @@ test('another tab saving progress never seeks playing or paused media; future lo
   assert.equal(a.player.currentTime, 120);
   assert.equal(vm.runInContext('getSavedPosition("recording.mp3")', a.box), 1800);
   // Allow async startup to finish so errors cannot escape after the test.
+  await Promise.resolve();
+});
+test('reading legacy positions persists migration once, then expires them without playback', async () => {
+  let now = 2_000_000_000_000;
+  let raw = JSON.stringify({ legacy: 42, object: { time: 60, duration: 100 } });
+  let writes = 0;
+  const storage = {
+    getItem: key => key === 'mediaPlaybackPositions' ? raw : null,
+    setItem: (key, value) => { if (key === 'mediaPlaybackPositions') { raw = value; writes++; } },
+  };
+  const { box } = tab(storage);
+  box.Date = class extends Date { static now() { return now; } };
+  vm.runInContext('readPositionStore()', box);
+  assert.equal(writes, 1);
+  assert.equal(JSON.parse(raw).legacy.updatedAt, now);
+  now += 1000;
+  vm.runInContext('readPositionStore()', box);
+  assert.equal(writes, 1);
+  now += 7 * 24 * 60 * 60 * 1000;
+  vm.runInContext('readPositionStore()', box);
+  assert.deepEqual(JSON.parse(raw), {});
+  assert.equal(writes, 2);
   await Promise.resolve();
 });

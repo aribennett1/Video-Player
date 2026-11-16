@@ -2,11 +2,11 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const script = fs.readFileSync(`${__dirname}/../index.html`, 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+const script = fs.readFileSync(`${__dirname}/../position-store.js`, 'utf8') + '\n' + fs.readFileSync(`${__dirname}/../app.js`, 'utf8');
 function source(name) {
-  const start = script.search(new RegExp(`      (?:async )?function ${name}\\(`));
+  const start = script.search(new RegExp(`(?:async )?function ${name}\\(`));
   assert(start >= 0, name);
-  return script.slice(start, script.indexOf('\n      }', start) + 8);
+  return script.slice(start, script.indexOf('\n}', start) + 2);
 }
 function setup(names, overrides = {}) {
   const stored = new Map();
@@ -25,7 +25,7 @@ function setup(names, overrides = {}) {
 }
 const file = name => ({ name, size: 123, lastModified: 456, type: 'audio/mp3' });
 const item = name => ({ ...file(name), id: name, isAudio: true, duration: 10, file: null, url: null });
-test('inline JavaScript parses', () => new vm.Script(script));
+test('application JavaScript parses', () => new vm.Script(script));
 test('saved snapshot preserves order, selection and handles without media contents or URLs', () => {
   let disk;
   const { box, stored } = setup(['queueRecord', 'saveQueue'], {

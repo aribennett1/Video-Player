@@ -53,7 +53,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 
 - **Persistent Resume**: The timestamp you were at is saved per filename and restored when you reload the same file
 - **Independent Tabs**: Saving progress never seeks playback in another tab. Future loads use the most recently saved position.
-- **Auto-Expiry**: Entries not updated in 7+ days are pruned automatically on read
+- **Auto-Expiry**: Entries not updated in 7+ days are pruned automatically on read. Legacy entries receive a timestamp on their first read and expire seven days later unless playback updates them.
 - **Clear on Remove**: Removing a file from the queue deletes its saved position
 
 ## Usage
@@ -118,7 +118,17 @@ Browsers' native media controls handle arrow keys at a lower level than JavaScri
 
 ### Playback Position Storage
 
-Positions are stored as JSON keyed by filename in `localStorage`. On read, entries with an `updatedAt` older than 7 days are pruned. Saved positions are applied only when loading a file. Updates from other tabs never seek an already loaded recording, including while paused. Tabs share the resume store, so a future load uses whichever position was saved most recently.
+Positions are stored as JSON keyed by filename in `localStorage`. On read, entries with an `updatedAt` older than 7 days are pruned. Legacy numeric positions and objects without a timestamp receive a one-time migration timestamp, persisted immediately; they then expire normally. Saved positions are applied only when loading a file. Updates from other tabs never seek an already loaded recording, including while paused. Tabs share the resume store, so a future load uses whichever position was saved most recently.
+
+### Source Layout and Tests
+
+- `index.html`: player markup and script loading order.
+- `styles.css`: layout and appearance.
+- `app.js`: playback, waveforms, queue persistence, and UI events.
+- `position-store.js`: pure position validation, migration, and expiry rules.
+- `coi-serviceworker.js`: offline caching and cross-origin isolation headers.
+
+Deployment remains build-free: serve these files together with `vendor/`. Run automated checks with `node --test tests/*.test.cjs`. Tests cover position expiry and migration, independent playback across tabs, queue restoration, and offline asset coverage.
 
 ## Browser Compatibility
 
