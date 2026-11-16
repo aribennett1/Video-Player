@@ -529,6 +529,7 @@
       let restoringQueue = false;
       let resumeItemId = null;
       let relinkingFiles = false;
+      let useNativePicker = false;
 
       function queueRecord(item) {
         return {
@@ -649,7 +650,7 @@
       async function chooseQueueFiles(relink = false) {
         if (!queueReady) return;
         relinkingFiles = relink;
-        if (!window.showOpenFilePicker) { fileInput.click(); return; }
+        if (!window.showOpenFilePicker || useNativePicker) { fileInput.click(); return; }
         try {
           const handles = await window.showOpenFilePicker({ multiple: true });
           const results = await Promise.allSettled(handles.map(async (handle) => ({ file: await handle.getFile(), handle })));
@@ -657,8 +658,9 @@
           addFilesToQueue(entries.map((entry) => entry.file), "filePicker", entries.map((entry) => entry.handle), relink);
         } catch (err) {
           if (err.name !== "AbortError") {
+            useNativePicker = true;
             queueRestore.hidden = false;
-            queueRestoreStatus.textContent = "File access unavailable. Use the file chooser to select files again.";
+            queueRestoreStatus.textContent = "Click again to select files using the standard chooser.";
             console.warn("File picker failed:", err);
           }
         } finally { relinkingFiles = false; }
@@ -668,7 +670,7 @@
       relinkQueueButton.addEventListener("click", () => chooseQueueFiles(true));
       // Prefer persistent handles for the existing native file chooser as well.
       fileInput.addEventListener("click", (event) => {
-        if (window.showOpenFilePicker) {
+        if (window.showOpenFilePicker && !useNativePicker) {
           event.preventDefault();
           chooseQueueFiles(relinkingFiles);
         }
@@ -1171,11 +1173,15 @@
         if (index === currentQueueIndex) {
           // If removing currently playing item, play next
           mediaQueue.splice(index, 1);
-          if (mediaQueue.length > 0) {
-            currentQueueIndex = Math.min(index, mediaQueue.length - 1);
-            playQueueItem(currentQueueIndex);
+          const nextIndex = mediaQueue.findIndex((item, i) => i >= index && item.url);
+          const availableIndex = nextIndex >= 0 ? nextIndex : mediaQueue.findIndex((item) => item.url);
+          if (availableIndex >= 0) {
+            currentQueueIndex = -1;
+            currentMediaName = null;
+            playQueueItem(availableIndex);
           } else {
             currentQueueIndex = -1;
+            currentMediaName = null;
             // Clear players
             cancelWaveformJob();
             videoPlayer.pause();
@@ -1234,17 +1240,19 @@
 
       // Play next in queue
       function playNext() {
-        if (currentQueueIndex < mediaQueue.length - 1) {
-          playQueueItem(currentQueueIndex + 1);
-        } else if (repeatMode === "playlist" && mediaQueue.length > 0) {
-          playQueueItem(0);
+        const nextIndex = mediaQueue.findIndex((item, index) => index > currentQueueIndex && item.url);
+        if (nextIndex >= 0) {
+          playQueueItem(nextIndex);
+        } else if (repeatMode === "playlist") {
+          const firstIndex = mediaQueue.findIndex((item) => item.url);
+          if (firstIndex >= 0) playQueueItem(firstIndex);
         }
       }
 
       // Play previous in queue
       function playPrevious() {
-        if (currentQueueIndex > 0) {
-          playQueueItem(currentQueueIndex - 1);
+        for (let index = currentQueueIndex - 1; index >= 0; index--) {
+          if (mediaQueue[index].url) { playQueueItem(index); break; }
         }
       }
 
@@ -1551,10 +1559,16 @@
         this.value = "";
       });
 
+      fileInput.addEventListener("cancel", () => { relinkingFiles = false; });
+
       reverseQueueButton.addEventListener("click", function () {
         if (mediaQueue.length < 2) return;
+        const playingItem = mediaQueue[currentQueueIndex];
         mediaQueue.reverse();
-        playQueueItem(0);
+        currentQueueIndex = playingItem ? mediaQueue.indexOf(playingItem) : -1;
+        updateQueueDisplay();
+        const firstIndex = mediaQueue.findIndex((item) => item.url);
+        if (firstIndex >= 0) playQueueItem(firstIndex);
       });
 
       queueContainer.addEventListener("click", function (e) {

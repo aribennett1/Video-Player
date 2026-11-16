@@ -71,7 +71,7 @@ When served over HTTPS (or localhost), the player saves the page and all FFmpeg 
 
 Subsequent requests try the live website first and refresh the saved copy when successful. If the connection fails, the server returns an error, or a request takes longer than eight seconds, the player uses its cached copy when available. Both the site root and `index.html` use the same saved page.
 
-Once the service worker has installed successfully, you can reopen the same URL offline and select local audio or video files, including generating video waveforms. Media files and the queue are not saved by the website cache; select your files again after reopening. Clearing browser site data also clears the offline copy.
+Once the service worker has installed successfully, you can reopen the same URL offline and select local audio or video files, including generating video waveforms. The queue is saved separately in browser storage. After reopening, click **Restore queue** to reopen files with saved access, or **Reselect files** to reconnect the originals. Media file contents are not copied into the website cache. Clearing browser site data also clears the offline copy.
 
 To check: visit the hosted site online, wait for the service worker to activate, then disconnect from the network and reload the same URL. Reconnect and reload to use the live site again.
 
@@ -84,6 +84,14 @@ To check: visit the hosted site online, wait for the service worker to activate,
 - **Reverse Order**: Click the opposing arrows beside “Queue” to reverse the queue and start playing the new first file.
 - **Remove**: Click "Remove" to remove a file and clear its saved position
 - **Add More**: Select additional files or drop them onto the page at any time to append them to the queue
+
+### Restoring After Reload or Reopening
+
+The player saves queue order and the selected track locally. After reopening the same URL in the same browser profile, click **Restore queue**. In browsers supporting the File System Access API (such as desktop Chrome and Edge), this requests read access to saved file handles and resumes the queue from the selected track and its saved position. The browser may require approval again, and playback may require pressing Play.
+
+Files added with the modern chooser or supported drag and drop retain handles. Other browsers and the standard file input save queue metadata only: use **Reselect files** to select the original files again. Matching uses filename, size, and last modification time; selection order does not change the saved queue order. Unavailable files stay listed for retry or removal, while playback skips them. Moved, deleted, or replaced files may need to be reselected or removed and added again.
+
+Only file references and queue metadata are saved, not full media contents. Clearing site data removes the saved queue and access. Queue storage is separate for each URL path; the most recently saved tab wins when multiple tabs use the same path.
 
 ### Controlling Playback
 
