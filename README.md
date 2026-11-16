@@ -102,7 +102,7 @@ To check: visit the hosted site online, wait for the service worker to activate,
 | Audio (MP3, WAV, etc.) | `file.arrayBuffer()` → Web Audio API `decodeAudioData` |
 | Video (MP4, MOV, etc.) | ffmpeg.wasm strips audio to 8kbps/8kHz mono MP3 → Web Audio API |
 
-The ffmpeg.wasm instance is a lazy singleton — it loads once on the first video file and is reused for all subsequent videos in the session.
+Waveforms retain only 4096 amplitude bins (16 KiB) for drawing and resizing. Temporary audio is decoded at 8 kHz and released after summarizing. Each video extraction worker is terminated after use to release its WebAssembly memory and virtual filesystem. Switching tracks cancels obsolete waveform jobs; removing files revokes their blob URLs.
 
 ### Arrow Key Seeking Fix
 

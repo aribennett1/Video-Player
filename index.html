@@ -350,6 +350,10 @@
         text-align: center;
         padding: 20px;
       }
+      .queue-restore { margin: 10px 0; color: #bbb; font-size: 13px; }
+      .queue-restore button { background: #333; color: #fff; border: 1px solid #555; border-radius: 5px; padding: 6px 10px; cursor: pointer; margin-right: 8px; }
+      .queue-restore button:disabled { opacity: .5; cursor: wait; }
+      .queue-item.unavailable .queue-item-name { color: #aaa; }
     </style>
   </head>
   <body>
@@ -443,6 +447,11 @@
             </button>
           </div>
         </div>
+        <div class="queue-restore" id="queueRestore" hidden>
+          <button type="button" id="restoreQueueButton">Restore queue</button>
+          <button type="button" id="relinkQueueButton">Reselect files</button>
+          <span id="queueRestoreStatus" role="status" aria-live="polite"></span>
+        </div>
         <ul class="queue-list" id="queueList">
           <li class="queue-empty">
             No files in queue. Select files or drop them onto the page to queue them.
@@ -465,12 +474,11 @@
       const queueList = document.getElementById("queueList");
       const reverseQueueButton = document.getElementById("reverseQueueButton");
 
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
       // Queue management
       let mediaQueue = [];
       let currentQueueIndex = -1;
-      let currentAudioBuffer = null;
+      let currentWaveform = null;
       let currentPlaybackSpeed = 1.0;
       let currentMediaName = null;
       let savePositionTimer = null;
@@ -498,10 +506,174 @@
         return new URL(`vendor/ffmpeg/${file}`, document.baseURI || window.location.href).href;
       }
 
-      // ffmpeg.wasm singleton — loaded lazily on first video file
-      let ffmpegInstance = null;
-      let ffmpegLoadPromise = null;
-      
+      // Each waveform job owns its temporary decoder and worker.
+      let waveformJob = null;
+
+      function cancelWaveformJob() {
+        if (!waveformJob) return;
+        waveformJob.controller.abort();
+        waveformJob.ff?.terminate();
+        if (waveformJob.audioCtx && waveformJob.audioCtx.state !== "closed") {
+          waveformJob.audioCtx.close().catch(() => {});
+        }
+        waveformJob = null;
+      }
+
+      const queueRestore = document.getElementById("queueRestore");
+      const restoreQueueButton = document.getElementById("restoreQueueButton");
+      const relinkQueueButton = document.getElementById("relinkQueueButton");
+      const queueRestoreStatus = document.getElementById("queueRestoreStatus");
+      const QUEUE_STORAGE_KEY = `mediaQueue:${location.pathname}`;
+      let queueDB = null;
+      let queueReady = false;
+      let restoringQueue = false;
+      let resumeItemId = null;
+      let relinkingFiles = false;
+
+      function queueRecord(item) {
+        return {
+          id: item.id, name: item.name, size: item.size,
+          lastModified: item.lastModified, isAudio: item.isAudio,
+          duration: item.duration, handle: item.handle || null,
+        };
+      }
+
+      function saveQueue() {
+        if (!queueReady) return;
+        const snapshot = {
+          items: mediaQueue.map(queueRecord),
+          resumeItemId: mediaQueue[currentQueueIndex]?.id || resumeItemId,
+        };
+        // Metadata survives even if handles cannot be stored by this browser.
+        try {
+          localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify({
+            ...snapshot, items: snapshot.items.map(({ handle, ...item }) => item),
+          }));
+        } catch (err) {
+          queueRestore.hidden = false;
+          queueRestoreStatus.textContent = "Queue could not be saved in this browser.";
+        }
+        if (!queueDB) return;
+        try {
+          const tx = queueDB.transaction("queue", "readwrite");
+          tx.objectStore("queue").put(snapshot, "current");
+          tx.onerror = () => console.warn("Could not save file access; queue metadata is still saved.");
+        } catch (err) {
+          console.warn("Could not save file access:", err);
+        }
+      }
+
+      async function loadSavedQueue() {
+        let metadata = null;
+        let stored = null;
+        try { metadata = JSON.parse(localStorage.getItem(QUEUE_STORAGE_KEY)); } catch (_) {}
+        try {
+          queueDB = await new Promise((resolve, reject) => {
+            const request = indexedDB.open(QUEUE_STORAGE_KEY, 1);
+            request.onupgradeneeded = () => request.result.createObjectStore("queue");
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+            request.onblocked = () => reject(new Error("Queue storage is busy"));
+          });
+          queueDB.onversionchange = () => { queueDB.close(); queueDB = null; };
+          stored = await new Promise((resolve, reject) => {
+            const request = queueDB.transaction("queue").objectStore("queue").get("current");
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+        } catch (err) { console.warn("Saved file access unavailable:", err); }
+        const snapshot = metadata || stored;
+        if (snapshot && Array.isArray(snapshot.items)) {
+          const handles = new Map((stored?.items || []).map((item) => [item.id, item.handle]));
+          mediaQueue = snapshot.items.filter((item) => item && typeof item.name === "string" && typeof item.id === "string").map((item) => ({
+            ...queueRecord(item), file: null, url: null,
+            handle: handles.get(item.id) || null,
+          }));
+          resumeItemId = snapshot.resumeItemId;
+        }
+        queueReady = true;
+        fileInput.disabled = false;
+        updateQueueDisplay();
+      }
+
+      function sameQueueFile(item, file) {
+        return item.name === file.name && item.size === file.size && item.lastModified === file.lastModified;
+      }
+
+      function attachQueueFile(item, file, handle) {
+        item.file = file;
+        item.url = URL.createObjectURL(file);
+        item.handle = handle || item.handle || null;
+      }
+
+      function resumeRestoredQueue() {
+        updateQueueDisplay();
+        if (currentQueueIndex >= 0) return;
+        const preferred = mediaQueue.findIndex((item) => item.id === resumeItemId && item.url);
+        const index = preferred >= 0 ? preferred : mediaQueue.findIndex((item) => item.url);
+        if (index >= 0) playQueueItem(index);
+      }
+
+      // Invoke permission requests directly in the click handler, before any I/O.
+      async function restoreSavedQueue() {
+        if (!queueReady || restoringQueue) return;
+        const pending = mediaQueue.filter((item) => !item.url && item.handle);
+        if (!pending.length) { chooseQueueFiles(true); return; }
+        restoringQueue = true;
+        const permissions = pending.map((item) => {
+          try { return Promise.resolve(item.handle.requestPermission({ mode: "read" })); }
+          catch (err) { return Promise.reject(err); }
+        });
+        updateQueueDisplay();
+        try {
+          const results = await Promise.allSettled(permissions);
+          await Promise.all(pending.map(async (item, index) => {
+            if (results[index].status !== "fulfilled" || results[index].value !== "granted") return;
+            try {
+              const file = await item.handle.getFile();
+              if (!mediaQueue.includes(item) || item.url) return;
+              if (!sameQueueFile(item, file)) {
+                item.size = file.size;
+                item.lastModified = file.lastModified;
+                item.duration = null;
+              }
+              attachQueueFile(item, file, item.handle);
+            } catch (err) { console.warn("File needs to be reselected:", item.name, err); }
+          }));
+        } finally {
+          restoringQueue = false;
+          resumeRestoredQueue();
+        }
+      }
+
+      async function chooseQueueFiles(relink = false) {
+        if (!queueReady) return;
+        relinkingFiles = relink;
+        if (!window.showOpenFilePicker) { fileInput.click(); return; }
+        try {
+          const handles = await window.showOpenFilePicker({ multiple: true });
+          const results = await Promise.allSettled(handles.map(async (handle) => ({ file: await handle.getFile(), handle })));
+          const entries = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
+          addFilesToQueue(entries.map((entry) => entry.file), "filePicker", entries.map((entry) => entry.handle), relink);
+        } catch (err) {
+          if (err.name !== "AbortError") {
+            queueRestore.hidden = false;
+            queueRestoreStatus.textContent = "File access unavailable. Use the file chooser to select files again.";
+            console.warn("File picker failed:", err);
+          }
+        } finally { relinkingFiles = false; }
+      }
+
+      restoreQueueButton.addEventListener("click", restoreSavedQueue);
+      relinkQueueButton.addEventListener("click", () => chooseQueueFiles(true));
+      // Prefer persistent handles for the existing native file chooser as well.
+      fileInput.addEventListener("click", (event) => {
+        if (window.showOpenFilePicker) {
+          event.preventDefault();
+          chooseQueueFiles(relinkingFiles);
+        }
+      });
+
       // Drag and drop state
       let draggedIndex = null;
 
@@ -626,7 +798,13 @@
         return new Promise((resolve) => {
           const el = document.createElement(isAudio ? "audio" : "video");
           el.preload = "metadata";
-          const cleanup = () => el.remove();
+          const cleanup = () => {
+            el.onloadedmetadata = null;
+            el.onerror = null;
+            el.removeAttribute("src");
+            el.load();
+            el.remove();
+          };
           el.onloadedmetadata = () => {
             const duration = el.duration;
             cleanup();
@@ -648,43 +826,35 @@
         progressCanvas.width = rect.width || 1;
         progressCanvas.height = rect.height || 1;
 
-        // Redraw waveform if we have audio buffer
-        if (currentAudioBuffer) {
-          drawFullWaveform(currentAudioBuffer);
+        // Redraw from compact amplitude data
+        if (currentWaveform) {
+          drawFullWaveform();
         }
       }
 
       window.addEventListener("resize", resizeCanvas);
       resizeCanvas();
 
-      // Draw a static waveform for the entire file (single channel)
-      function drawFullWaveform(audioBuffer) {
-        currentAudioBuffer = audioBuffer;
-        const sampleCount = canvas.width;
-        if (sampleCount <= 0) return;
+      // Retain only 4096 amplitude bins (16 KiB), never the decoded track.
+      function summarizeWaveform(audioBuffer) {
+        const channelData = audioBuffer.getChannelData(0);
+        const waveform = new Float32Array(Math.min(4096, channelData.length));
+        for (let i = 0; i < waveform.length; i++) {
+          const start = Math.floor(i * channelData.length / waveform.length);
+          const end = Math.floor((i + 1) * channelData.length / waveform.length);
+          let sum = 0;
+          for (let j = start; j < end; j++) sum += Math.abs(channelData[j]);
+          waveform[i] = sum / (end - start || 1);
+        }
+        return waveform;
+      }
 
+      function drawFullWaveform() {
+        if (!currentWaveform) return;
+        const waveform = currentWaveform;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#111";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Use first channel only
-        const channelData = audioBuffer.getChannelData(0);
-        const blockSize = Math.max(
-          1,
-          Math.floor(channelData.length / sampleCount)
-        );
-        const waveform = new Float32Array(sampleCount);
-
-        // Calculate average amplitude for each pixel
-        for (let i = 0; i < sampleCount; i++) {
-          let sum = 0;
-          const start = i * blockSize;
-          const end = Math.min(start + blockSize, channelData.length);
-          for (let j = start; j < end; j++) {
-            sum += Math.abs(channelData[j]);
-          }
-          waveform[i] = sum / (end - start || 1);
-        }
 
         // Draw waveform
         ctx.lineWidth = 1;
@@ -694,8 +864,12 @@
         const halfHeight = canvas.height / 2;
         const amplification = 7; // Make waves taller
 
-        for (let x = 0; x < waveform.length; x++) {
-          const v = waveform[x];
+        for (let x = 0; x < canvas.width; x++) {
+          const start = Math.floor(x * waveform.length / canvas.width);
+          const end = Math.min(waveform.length, Math.max(start + 1, Math.floor((x + 1) * waveform.length / canvas.width)));
+          let sum = 0;
+          for (let i = start; i < end; i++) sum += waveform[i];
+          const v = sum / (end - start || 1);
           const barHeight = Math.min(
             v * halfHeight * amplification,
             halfHeight
@@ -706,7 +880,7 @@
 
       // Show a loading state on the waveform canvas while ffmpeg is working
       function drawWaveformLoadingState(message) {
-        currentAudioBuffer = null;
+        currentWaveform = null;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#111";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -719,7 +893,7 @@
 
       // Flat bar shown when waveform generation fails entirely
       function drawFlatFallback() {
-        currentAudioBuffer = null;
+        currentWaveform = null;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#111";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -732,50 +906,20 @@
         ctx.fillText("Waveform unavailable", 8, 18);
       }
 
-      // Lazy-load ffmpeg.wasm 0.12 (includes WORKERFS for large files)
-      async function getFFmpeg() {
-        if (ffmpegInstance) return ffmpegInstance;
-        if (ffmpegLoadPromise) return ffmpegLoadPromise;
-
-        ffmpegLoadPromise = (async () => {
-          console.log(ts(), "[ffmpeg] Starting load.",
-            "crossOriginIsolated:", window.crossOriginIsolated,
-            "SharedArrayBuffer:", typeof SharedArrayBuffer !== "undefined",
-            "SW controller:", !!(navigator.serviceWorker && navigator.serviceWorker.controller));
-
-          const { FFmpeg } = FFmpegWASM;
-          const coreURL = ffmpegAsset("ffmpeg-core.js");
-          const wasmURL = ffmpegAsset("ffmpeg-core.wasm");
-
-          const ff = new FFmpeg();
-          ff.on("log", ({ message }) => console.log(ts(), "[ffmpeg wasm]", message));
-          ff.on("progress", ({ progress, time }) => {
-            if (progress > 0) {
-              console.log(ts(), "[ffmpeg] progress:", Math.round(progress * 100) + "%", "time:", time);
-            }
-          });
-
-          console.log(ts(), "[ffmpeg] Calling ff.load()...", { coreURL, wasmURL });
-          await ff.load({ coreURL, wasmURL });
-          console.log(ts(), "[ffmpeg] ff.load() complete.");
-          ffmpegInstance = ff;
-          ffmpegLoadPromise = null;
-          return ff;
-        })();
-
-        return ffmpegLoadPromise;
-      }
-
-      async function decodeAndDrawWaveform(arrayBuffer) {
-        console.log(ts(), "[waveform] decodeAndDrawWaveform. Byte length:", arrayBuffer.byteLength);
-        if (audioCtx.state === "suspended") await audioCtx.resume();
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        console.log(ts(), "[waveform] decodeAudioData complete.",
-          "duration:", audioBuffer.duration.toFixed(2) + "s",
-          "channels:", audioBuffer.numberOfChannels,
-          "sampleRate:", audioBuffer.sampleRate);
-        drawFullWaveform(audioBuffer);
-        console.log(ts(), "[waveform] drawFullWaveform complete.");
+      async function decodeAndDrawWaveform(arrayBuffer, job) {
+        if (waveformJob !== job) return;
+        // Decode at 8 kHz to limit temporary PCM memory as well.
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+        job.audioCtx = audioCtx;
+        try {
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          if (waveformJob !== job) return;
+          currentWaveform = summarizeWaveform(audioBuffer);
+          drawFullWaveform();
+        } finally {
+          if (audioCtx.state !== "closed") await audioCtx.close();
+          job.audioCtx = null;
+        }
       }
 
       function safeFfmpegInputName(originalName) {
@@ -787,79 +931,73 @@
 
       // Mount video via WORKERFS (reads File in chunks — no multi-GB MEMFS copy),
       // extract a tiny audio track, then draw with the same path as audio files.
-      async function extractAudioWithFFmpeg(item) {
+      async function extractAudioWithFFmpeg(item, job) {
         console.log(ts(), "[ffmpeg] extractAudioWithFFmpeg called.",
           "file:", item.name, "size:", item.file.size, "type:", item.file.type);
 
-        const ff = await getFFmpeg();
-        console.log(ts(), "[ffmpeg] Got ffmpeg instance.");
-
-        const mountDir = "/input";
-        const inputName = safeFfmpegInputName(item.name);
-        const inputPath = `${mountDir}/${inputName}`;
-        const outputName = "audio.mp3";
-
-        // WORKERFS reads the File via blob.slice() — never copies the whole video into RAM
-        const inputFile = item.file.name === inputName
-          ? item.file
-          : new File([item.file], inputName, { type: item.file.type });
-
-        console.log(ts(), "[ffmpeg] Mounting WORKERFS at", mountDir, "as", inputName);
-        await ff.createDir(mountDir);
-        await ff.mount("WORKERFS", { files: [inputFile] }, mountDir);
-
+        const ff = new FFmpegWASM.FFmpeg();
+        job.ff = ff;
         try {
-          console.log(ts(), "[ffmpeg] Running audio extraction (8kHz mono MP3)...");
-          await ff.exec([
-            "-i", inputPath,
-            "-vn",
-            "-ac", "1",
-            "-ar", "8000",
-            "-b:a", "8k",
-            "-f", "mp3",
-            outputName,
-          ]);
-          console.log(ts(), "[ffmpeg] ff.exec() complete.");
+          await ff.load({ coreURL: ffmpegAsset("ffmpeg-core.js"), wasmURL: ffmpegAsset("ffmpeg-core.wasm") });
+          console.log(ts(), "[ffmpeg] Got ffmpeg instance.");
 
-          const data = await ff.readFile(outputName);
-          console.log(ts(), "[ffmpeg] Read", outputName, "Byte length:", data.byteLength);
-          await ff.deleteFile(outputName);
-          return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-        } catch (err) {
-          console.error(ts(), "[ffmpeg] extraction FAILED:", err);
-          throw err;
+          const mountDir = "/input";
+          const inputName = safeFfmpegInputName(item.name);
+          const inputPath = `${mountDir}/${inputName}`;
+          const outputName = "audio.mp3";
+
+          // WORKERFS reads the File via blob.slice() — never copies the whole video into RAM
+          const inputFile = item.file.name === inputName
+            ? item.file
+            : new File([item.file], inputName, { type: item.file.type });
+
+          console.log(ts(), "[ffmpeg] Mounting WORKERFS at", mountDir, "as", inputName);
+          await ff.createDir(mountDir);
+          await ff.mount("WORKERFS", { files: [inputFile] }, mountDir);
+
+          try {
+            console.log(ts(), "[ffmpeg] Running audio extraction (8kHz mono MP3)...");
+            await ff.exec([
+              "-i", inputPath,
+              "-vn",
+              "-ac", "1",
+              "-ar", "8000",
+              "-b:a", "8k",
+              "-f", "mp3",
+              outputName,
+            ]);
+            console.log(ts(), "[ffmpeg] ff.exec() complete.");
+
+            const data = await ff.readFile(outputName);
+            console.log(ts(), "[ffmpeg] Read", outputName, "Byte length:", data.byteLength);
+            await ff.deleteFile(outputName);
+            return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+          } catch (err) {
+            console.error(ts(), "[ffmpeg] extraction FAILED:", err);
+            throw err;
+          }
         } finally {
-          await ff.unmount(mountDir);
-          await ff.deleteDir(mountDir);
-          console.log(ts(), "[ffmpeg] WORKERFS unmounted.");
+          ff.terminate();
+          job.ff = null;
         }
       }
 
-      async function renderWaveformForItem(item) {
+      async function renderWaveformForItem(item, job) {
+        if (waveformJob !== job) return;
         resizeCanvas();
-        console.log(ts(), "[waveform] renderWaveformForItem.",
-          "isAudio:", item.isAudio, "file:", item.name,
-          "crossOriginIsolated:", window.crossOriginIsolated);
-
-        if (item.isAudio) {
-          try {
-            console.log(ts(), "[waveform] Fetching audio blob URL...");
-            const arrayBuffer = await fetch(item.url).then((r) => r.arrayBuffer());
-            console.log(ts(), "[waveform] Audio fetch complete. Byte length:", arrayBuffer.byteLength);
-            await decodeAndDrawWaveform(arrayBuffer);
-          } catch (err) {
-            console.warn(ts(), "[waveform] Could not decode audio for waveform:", err);
-            drawFlatFallback();
-          }
-        } else {
-          drawWaveformLoadingState("Generating waveform\u2026");
-          try {
-            const audioArrayBuffer = await extractAudioWithFFmpeg(item);
-            await decodeAndDrawWaveform(audioArrayBuffer);
-          } catch (err) {
-            console.warn(ts(), "[waveform] ffmpeg audio extraction failed:", err);
-            drawFlatFallback();
-          }
+        drawWaveformLoadingState("Generating waveform…");
+        try {
+          const data = item.isAudio
+            ? await fetch(item.url, { signal: job.controller.signal }).then((r) => r.arrayBuffer())
+            : await extractAudioWithFFmpeg(item, job);
+          if (waveformJob !== job) return;
+          await decodeAndDrawWaveform(data, job);
+        } catch (err) {
+          if (waveformJob !== job) return;
+          console.warn(ts(), "[waveform] Generation failed:", err);
+          drawFlatFallback();
+        } finally {
+          if (waveformJob === job) waveformJob = null;
         }
       }
 
@@ -897,6 +1035,14 @@
 
       // Update queue display
       function updateQueueDisplay() {
+        saveQueue();
+        const missing = mediaQueue.filter((item) => !item.url).length;
+        queueRestore.hidden = missing === 0;
+        restoreQueueButton.disabled = restoringQueue;
+        relinkQueueButton.disabled = restoringQueue;
+        if (missing) queueRestoreStatus.textContent = restoringQueue
+          ? "Restoring files…"
+          : `${missing} saved file${missing === 1 ? " needs" : "s need"} access. Restore or reselect the original files.`;
         reverseQueueButton.disabled = mediaQueue.length < 2;
         queueList.innerHTML = "";
 
@@ -909,7 +1055,7 @@
         mediaQueue.forEach((item, index) => {
           const li = document.createElement("li");
           li.className =
-            "queue-item" + (index === currentQueueIndex ? " playing" : "");
+            "queue-item" + (index === currentQueueIndex ? " playing" : "") + (!item.url ? " unavailable" : "");
           li.draggable = true;
           li.dataset.index = index;
 
@@ -918,7 +1064,7 @@
 
           const nameSpan = document.createElement("span");
           nameSpan.className = "queue-item-name";
-          nameSpan.textContent = item.name;
+          nameSpan.textContent = item.name + (!item.url ? " (restore required)" : "");
 
           const popover = document.createElement("span");
           popover.className = "queue-item-popover";
@@ -1016,7 +1162,10 @@
       }
 
       function removeFromQueue(index) {
-        const removedName = mediaQueue[index].name;
+        const removedItem = mediaQueue[index];
+        const removedName = removedItem.name;
+        if (removedItem.url) URL.revokeObjectURL(removedItem.url);
+        if (resumeItemId === removedItem.id) resumeItemId = null;
         deletePositionEntry(removedName);
 
         if (index === currentQueueIndex) {
@@ -1028,10 +1177,15 @@
           } else {
             currentQueueIndex = -1;
             // Clear players
-            videoPlayer.src = "";
+            cancelWaveformJob();
+            videoPlayer.pause();
+            videoPlayer.removeAttribute("src");
+            videoPlayer.load();
             videoPlayer.classList.remove("loaded-video");
-            audioPlayer.src = "";
-            currentAudioBuffer = null;
+            audioPlayer.pause();
+            audioPlayer.removeAttribute("src");
+            audioPlayer.load();
+            currentWaveform = null;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             progressCtx.clearRect(
               0,
@@ -1052,7 +1206,19 @@
       // Play specific queue item
       async function playQueueItem(index) {
         if (index < 0 || index >= mediaQueue.length) return;
+        if (!mediaQueue[index].url) {
+          queueRestore.hidden = false;
+          queueRestoreStatus.textContent = "Use Restore queue or reselect this file to play it.";
+          return;
+        }
 
+        saveCurrentPositionNow();
+        resumeItemId = mediaQueue[index].id;
+        cancelWaveformJob();
+        const job = { controller: new AbortController(), ff: null, audioCtx: null };
+        waveformJob = job;
+        currentWaveform = null;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         currentQueueIndex = index;
         const item = mediaQueue[index];
 
@@ -1061,8 +1227,9 @@
         // Load media and restore any cookie-saved playback position for this filename.
         const player = await loadMedia(item.url, item.isAudio, item.name);
 
+        if (waveformJob !== job) return;
         updateMediaSession();
-        await renderWaveformForItem(item);
+        await renderWaveformForItem(item, job);
       }
 
       // Play next in queue
@@ -1159,6 +1326,8 @@
         const otherPlayer = isAudio ? videoPlayer : audioPlayer;
 
         otherPlayer.pause();
+        otherPlayer.removeAttribute("src");
+        otherPlayer.load();
         otherPlayer.hidden = true;
         otherPlayer.classList.remove("loaded-video");
         player.hidden = false;
@@ -1223,7 +1392,7 @@
           audioPlayer.focus();
         }, 0);
       });
-      
+
       function handleQueueSkipKey(e) {
         if (e.key === "MediaTrackNext") {
           e.preventDefault();
@@ -1248,16 +1417,16 @@
 
         if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
           const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
-          
+
           // If player is playing or has focus, intercept
           if ((document.activeElement === videoPlayer || document.activeElement === audioPlayer) ||
               (player.duration && !player.paused)) {
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
-            
+
             if (!player.duration) return;
-            
+
             if (e.key === "ArrowRight") {
               player.currentTime = Math.min(player.currentTime + 2, player.duration);
             } else {
@@ -1275,21 +1444,21 @@
         if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
           const activeElement = document.activeElement;
           const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
-          
+
           // Handle arrow keys if media player has focus OR if it's playing
-          if (activeElement === videoPlayer || activeElement === audioPlayer || 
+          if (activeElement === videoPlayer || activeElement === audioPlayer ||
               (player.duration && !player.paused)) {
             e.preventDefault();
             e.stopImmediatePropagation();
-            
+
             if (!player.duration) return;
-            
+
             if (e.key === "ArrowRight") {
               player.currentTime = Math.min(player.currentTime + 2, player.duration);
             } else {
               player.currentTime = Math.max(player.currentTime - 2, 0);
             }
-            
+
             // Ensure player has focus for consistent behavior
             player.focus();
           }
@@ -1323,12 +1492,17 @@
         return audioFallbackExtensions.has(getFileExtension(file.name));
       }
 
-      function addFilesToQueue(files, sourceLabel) {
+      function addFilesToQueue(files, sourceLabel, handles = [], relinkOnly = false) {
+        if (!queueReady) return;
         const mediaFiles = files.filter(isSupportedMediaFile);
         if (mediaFiles.length === 0) return;
 
         // Add files to queue
         mediaFiles.forEach((file) => {
+          const handle = handles[files.indexOf(file)] || null;
+          const missing = mediaQueue.find((item) => !item.url && sameQueueFile(item, file));
+          if (missing) { attachQueueFile(missing, file, handle); return; }
+          if (relinkOnly) return;
           const url = URL.createObjectURL(file);
           const isAudio = shouldUseAudioPlayer(file);
           console.log(ts(), `[${sourceLabel}] Added to queue:`,
@@ -1336,6 +1510,10 @@
             "isAudio:", isAudio, "blob URL:", url);
 
           const queueItem = {
+            id: crypto.randomUUID(),
+            size: file.size,
+            lastModified: file.lastModified,
+            handle,
             file: file,
             url: url,
             isAudio: isAudio,
@@ -1359,17 +1537,15 @@
 
         updateQueueDisplay();
 
-        // If nothing is playing, start playing first item
-        if (currentQueueIndex === -1 && mediaQueue.length > 0) {
-          playQueueItem(0);
-        }
+        resumeRestoredQueue();
       }
 
       fileInput.addEventListener("change", function () {
         const files = Array.from(this.files);
         if (files.length === 0) return;
 
-        addFilesToQueue(files, "fileInput");
+        addFilesToQueue(files, "fileInput", [], relinkingFiles);
+        relinkingFiles = false;
 
         // Clear file input so same files can be added again
         this.value = "";
@@ -1382,17 +1558,18 @@
       });
 
       queueContainer.addEventListener("click", function (e) {
+        if (e.target.closest(".queue-restore")) return;
         if (e.target.closest(".queue-actions")) return;
         if (e.target.closest(".queue-item")) return;
         if (e.target.closest(".queue-controls")) return;
-        fileInput.click();
+        chooseQueueFiles();
       });
 
       queueContainer.addEventListener("keydown", function (e) {
         if (e.target !== queueContainer) return;
         if (e.key !== "Enter" && e.key !== " ") return;
         e.preventDefault();
-        fileInput.click();
+        chooseQueueFiles();
       });
 
       document.addEventListener("dragover", function (e) {
@@ -1402,11 +1579,19 @@
         e.dataTransfer.dropEffect = "copy";
       });
 
-      document.addEventListener("drop", function (e) {
+      document.addEventListener("drop", async function (e) {
         if (!isFileDrag(e)) return;
-
         e.preventDefault();
-        addFilesToQueue(Array.from(e.dataTransfer.files), "fileDrop");
+        if (!queueReady) return;
+        // Capture handles before yielding: the drag data is only valid in this event.
+        const entries = Array.from(e.dataTransfer.items || []).filter((item) => item.kind === "file").map((item) => {
+          const file = item.getAsFile();
+          let handle;
+          try { handle = item.getAsFileSystemHandle?.(); } catch (_) {}
+          return { file, handle };
+        }).filter((entry) => entry.file);
+        const handles = await Promise.all(entries.map((entry) => Promise.resolve(entry.handle).catch(() => null)));
+        addFilesToQueue(entries.map((entry) => entry.file), "fileDrop", handles.map((handle) => handle?.kind === "file" ? handle : null));
       });
 
       // Speed control
@@ -1430,7 +1615,7 @@
         const newTime = percentage * player.duration;
 
         player.currentTime = Math.max(0, Math.min(newTime, player.duration));
-        
+
         // Refocus the player so arrow keys work correctly
         player.focus();
       });
@@ -1492,6 +1677,8 @@
           );
         }
       });
+      fileInput.disabled = true;
+      loadSavedQueue();
     </script>
   </body>
 </html>
