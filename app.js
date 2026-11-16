@@ -21,6 +21,25 @@ let currentMediaName = null;
 let savePositionTimer = null;
 let repeatMode = "none";
 
+const SPEED_STORAGE_KEY = `mediaPlaybackSpeed:${location.pathname}`;
+try {
+  const savedSpeed = Number(localStorage.getItem(SPEED_STORAGE_KEY));
+  if (Number.isFinite(savedSpeed) && savedSpeed >= 0.1 && savedSpeed <= 100) {
+    currentPlaybackSpeed = savedSpeed;
+  }
+} catch (err) {
+  console.warn("Could not read playback speed:", err);
+}
+speedControl.value = String(currentPlaybackSpeed);
+
+function savePlaybackSpeed() {
+  try {
+    localStorage.setItem(SPEED_STORAGE_KEY, String(currentPlaybackSpeed));
+  } catch (err) {
+    console.warn("Could not save playback speed:", err);
+  }
+}
+
 const POSITION_STORAGE_KEY = "mediaPlaybackPositions";
 const POSITION_SAVE_DELAY_MS = 5000;
 const POSITION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1106,9 +1125,10 @@ document.addEventListener("drop", async function (e) {
 // Speed control
 speedControl.addEventListener("input", function () {
   const val = parseFloat(this.value);
-  if (isNaN(val) || val <= 0) return;
+  if (!Number.isFinite(val) || val < 0.1 || val > 100) return;
 
   currentPlaybackSpeed = val;
+  savePlaybackSpeed();
   if (!videoPlayer.hidden) videoPlayer.playbackRate = val;
   if (!audioPlayer.hidden) audioPlayer.playbackRate = val;
 });
@@ -1142,12 +1162,14 @@ window.addEventListener("keydown", function (e) {
       e.preventDefault();
       player.playbackRate = Math.min(player.playbackRate + 0.1, 100);
       currentPlaybackSpeed = player.playbackRate;
+      savePlaybackSpeed();
       break;
     case "s":
     case "S":
       e.preventDefault();
       player.playbackRate = Math.max(player.playbackRate - 0.1, 0.1);
       currentPlaybackSpeed = player.playbackRate;
+      savePlaybackSpeed();
       break;
     case "ArrowRight":
       e.preventDefault();

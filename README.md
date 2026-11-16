@@ -14,7 +14,7 @@ A modern, feature-rich HTML5 media player that supports both audio and video pla
 
 - **Variable Playback Speed**: Adjust from 0.1x to 100x speed
 - **Manual Input**: Direct speed entry via number input field
-- **Persistent Across Files**: Speed setting is maintained when the queue advances to the next file
+- **Persistent Across Files**: Speed setting is maintained when the queue advances to the next file and restored after reload or reopening. Changes from the controller and keyboard shortcuts are saved locally per URL path
 - **Keyboard Shortcuts**: Quick speed adjustments using hotkeys
   - Press `D` to increase speed by 0.1x
   - Press `S` to decrease speed by 0.1x
