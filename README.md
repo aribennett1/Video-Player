@@ -87,11 +87,15 @@ To check: visit the hosted site online, wait for the service worker to activate,
 
 ### Restoring After Reload or Reopening
 
-The player saves queue order and the selected track locally. After reopening the same URL in the same browser profile, click **Restore queue**. In browsers supporting the File System Access API (such as desktop Chrome and Edge), this requests read access to saved file handles and resumes the queue from the selected track and its saved position. The browser may require approval again, and playback may require pressing Play.
+Each queue is saved as its own session, including file order, selected track, playback positions, and speed. Reloading a tab retains its session; a fresh tab starts empty. Expand **Saved queues** to restore an earlier session, rename it, or delete its saved state. Labels show the first filename (or your chosen name), file count, and last-used date.
 
-Files added with the modern chooser or supported drag and drop retain handles. Other browsers and the standard file input save queue metadata only: use **Reselect files** to select the original files again. Matching uses filename, size, and last modification time; selection order does not change the saved queue order. Unavailable files stay listed for retry or removal, while playback skips them. Moved, deleted, or replaced files may need to be reselected or removed and added again.
+Click **New queue** to save the current session and start another. Adding a new batch while the current queue is still completely unrestored also starts a separate session, preserving the old queue. Use **Reselect files** to reconnect the original queue instead. Adding files to a queue that already has accessible files appends them to that session.
 
-Only file references and queue metadata are saved, not full media contents. Clearing site data removes the saved queue and access. Queue storage is separate for each URL path; the most recently saved tab wins when multiple tabs use the same path.
+Restoring a session that is not open elsewhere continues that session. Restoring a session already open in another tab, or duplicating that tab, creates an independent copy. File order, positions, and speed then save separately. The browser may request file access again, and playback may require pressing Play. Without browser support for tab coordination, restoring a saved session always makes a copy; deleting saved queues requires tab coordination support.
+
+Files added with the modern chooser or supported drag and drop retain handles. Other browsers and the standard file input save queue metadata only: use **Reselect files** to select the original files again. Matching uses filename, size, and last modification time; selection order does not change the saved queue order. Unavailable files appear under a collapsed **Saved files to restore** chevron, with a count. Expand it to restore, reselect, or remove files. Files ready for playback stay visible in the main queue, and playback skips unavailable entries. Each tab controls its own expanded/collapsed view. Moved, deleted, or replaced files may need to be reselected or removed and added again.
+
+Only file references and queue metadata are saved, not full media contents. Clearing site data removes the saved queue and access. Queue storage is separate for each URL path. Each session has its own storage key, so saving one queue does not overwrite another. Deleting a saved queue does not delete media files, and queues open in other tabs cannot be deleted until those tabs close.
 
 ### Controlling Playback
 
@@ -118,7 +122,7 @@ Browsers' native media controls handle arrow keys at a lower level than JavaScri
 
 ### Playback Position Storage
 
-Positions are stored as JSON keyed by filename in `localStorage`. On read, entries with an `updatedAt` older than 7 days are pruned. Legacy numeric positions and objects without a timestamp receive a one-time migration timestamp, persisted immediately; they then expire normally. Saved positions are applied only when loading a file. Updates from other tabs never seek an already loaded recording, including while paused. Tabs share the resume store, so a future load uses whichever position was saved most recently.
+Positions are stored as JSON keyed by filename in `localStorage`. On read, entries with an `updatedAt` older than 7 days are pruned. Legacy numeric positions and objects without a timestamp receive a one-time migration timestamp, persisted immediately; they then expire normally. Saved positions are applied only when loading a file. Updates from other tabs never seek an already loaded recording, including while paused. Saved sessions keep their own position for each queued file. The shared filename-based store supplies a default resume position for newly selected files that do not yet have a session-specific position.
 
 ### Source Layout and Tests
 
@@ -126,9 +130,10 @@ Positions are stored as JSON keyed by filename in `localStorage`. On read, entri
 - `styles.css`: layout and appearance.
 - `app.js`: playback, waveforms, queue persistence, and UI events.
 - `position-store.js`: pure position validation, migration, and expiry rules.
+- `queue-sessions.js`: separate session records, tab ownership, copying, and deletion.
 - `coi-serviceworker.js`: offline caching and cross-origin isolation headers.
 
-Deployment remains build-free: serve these files together with `vendor/`. Run automated checks with `node --test tests/*.test.cjs`. Tests cover position expiry and migration, independent playback across tabs, queue restoration, and offline asset coverage.
+Deployment remains build-free: serve these files together with `vendor/`. Run automated checks with `node --test tests/*.test.cjs`. Tests cover position expiry and migration, independent playback across tabs, session ownership and copying, queue restoration, and offline asset coverage.
 
 ## Browser Compatibility
 

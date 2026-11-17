@@ -39,6 +39,7 @@
         <div class="queue-control-row">
           <div class="queue-actions">
             <h3>Queue</h3>
+            <button type="button" id="newQueueButton" class="new-queue-button">New queue</button>
             <button
               type="button"
               id="reverseQueueButton"
@@ -102,11 +103,20 @@
             </button>
           </div>
         </div>
-        <div class="queue-restore" id="queueRestore" hidden>
-          <button type="button" id="restoreQueueButton">Restore queue</button>
-          <button type="button" id="relinkQueueButton">Reselect files</button>
-          <span id="queueRestoreStatus" role="status" aria-live="polite"></span>
-        </div>
+        <p id="sessionStatus" class="session-status" role="status" aria-live="polite"></p>
+        <details class="saved-queues" id="savedQueues" hidden>
+          <summary id="savedQueuesSummary">Saved queues</summary>
+          <ul id="savedQueuesList" class="saved-queues-list"></ul>
+        </details>
+        <details class="queue-restore" id="queueRestore" hidden>
+          <summary title="Expand or collapse saved files" id="queueRestoreSummary">Saved files to restore</summary>
+          <div class="queue-restore-controls">
+            <button type="button" id="restoreQueueButton">Restore queue</button>
+            <button type="button" id="relinkQueueButton">Reselect files</button>
+            <span id="queueRestoreStatus" role="status" aria-live="polite"></span>
+          </div>
+          <ul class="queue-list" id="queueRestoreList" aria-label="Saved files requiring access"></ul>
+        </details>
         <ul class="queue-list" id="queueList">
           <li class="queue-empty">
             No files in queue. Select files or drop them onto the page to queue them.
@@ -116,6 +126,7 @@
     </div>
 
     <script src="position-store.js"></script>
+    <script src="queue-sessions.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

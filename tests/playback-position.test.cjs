@@ -2,40 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const script = fs.readFileSync(`${__dirname}/../position-store.js`, 'utf8') + '\n' + fs.readFileSync(`${__dirname}/../app.js`, 'utf8');
-function tab(storage) {
-  const listeners = new Map();
-  const elements = new Map();
-  function element(id) {
-    if (!elements.has(id)) elements.set(id, {
-      handlers: {}, playbackRate: 1, dataset: {}, hidden: id === 'audioPlayer', currentTime: 0, duration: 3600, paused: false,
-      classList: { toggle() {}, add() {}, remove() {} },
-      getContext: () => ({ clearRect() {}, fillRect() {} }),
-      getBoundingClientRect: () => ({ width: 800, height: 100 }),
-      addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute() {},
-    });
-    return elements.get(id);
-  }
-  const box = {
-    console: { warn() {}, log() {} },
-    document: { getElementById: element, addEventListener() {}, activeElement: { tagName: 'BODY' } },
-    window: { addEventListener(name, fn) {
-      if (!listeners.has(name)) listeners.set(name, []);
-      listeners.get(name).push(fn);
-    } },
-    navigator: {}, location: { pathname: '/' }, localStorage: storage,
-    requestAnimationFrame() {}, setTimeout() {}, clearTimeout() {},
-    AbortController, URL, Float32Array,
-  };
-  vm.createContext(box);
-  vm.runInContext(script, box);
-  vm.runInContext('currentMediaName = "recording.mp3";', box);
-  return { box, element, player: element('videoPlayer'), emitKey(key) {
-    for (const handler of listeners.get('keydown') || []) handler({ key, preventDefault() {} });
-  }, emitStorage(event) {
-    for (const handler of listeners.get('storage') || []) handler(event);
-  } };
-}
+const { tab } = require('./helpers/player.cjs');
 test('another tab saving progress never seeks playing or paused media; future loads use latest resume', async () => {
   const values = new Map();
   const storage = {
@@ -119,5 +86,39 @@ test('invalid or unavailable speed storage falls back to 1x; unavailable writes 
   assert.equal(session.player.playbackRate, 2);
   control.value = '200'; control.handlers.input.call(control);
   assert.equal(session.player.playbackRate, 2);
+  await Promise.resolve();
+});
+test('unrestored files collapse separately while playable files stay visible and queue order is preserved', async () => {
+  const session = tab({ getItem: () => null, setItem() {} });
+  await session.ready;
+  session.box.entries = [
+    { id: 'a', name: 'saved a.mp3', url: null },
+    { id: 'b', name: 'playing.mp3', url: 'blob:b' },
+    { id: 'c', name: 'saved c.mp3', url: null },
+  ];
+  vm.runInContext('mediaQueue = entries; currentQueueIndex = 1; updateQueueDisplay();', session.box);
+  const details = session.element('queueRestore');
+  const missing = session.element('queueRestoreList');
+  const available = session.element('queueList');
+  assert.equal(details.hidden, false); assert.equal(details.open, false);
+  assert.equal(session.element('queueRestoreSummary').textContent, 'Saved files to restore (2)');
+  assert.deepEqual(missing.children.map(li => li.dataset.index), [0, 2]);
+  assert.deepEqual(available.children.map(li => li.dataset.index), [1]);
+  assert(available.children[0].className.includes('playing'));
+  details.open = true;
+  vm.runInContext('updateQueueDisplay()', session.box);
+  assert.equal(details.open, true); // Metadata updates do not collapse an expanded list.
+  vm.runInContext('mediaQueue[0].url = "blob:a"; updateQueueDisplay()', session.box);
+  assert.equal(missing.children.length, 1); assert.equal(available.children.length, 2);
+  vm.runInContext('mediaQueue[2].url = "blob:c"; updateQueueDisplay()', session.box);
+  assert.equal(details.hidden, true); assert.equal(available.children.length, 3);
+  assert.deepEqual(Array.from(vm.runInContext('mediaQueue.map(item => item.id)', session.box)), ['a', 'b', 'c']);
+});
+test('Space on the restore chevron is left to the browser rather than toggling playback', async () => {
+  const session = tab({ getItem: () => null, setItem() {} });
+  session.box.document.activeElement = { tagName: 'SUMMARY' };
+  session.player.play = () => assert.fail('summary activation must not start media');
+  session.player.pause = () => assert.fail('summary activation must not pause media');
+  session.emitKey(' ');
   await Promise.resolve();
 });

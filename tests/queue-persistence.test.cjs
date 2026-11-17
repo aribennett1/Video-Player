@@ -13,7 +13,7 @@ function setup(names, overrides = {}) {
   const box = {
     console: { log() {}, warn() {} }, URL: { createObjectURL: file => `blob:${file.name}` },
     mediaQueue: [], currentQueueIndex: -1, resumeItemId: null, queueDB: null,
-    queueReady: true, restoringQueue: false, QUEUE_STORAGE_KEY: 'test-queue',
+    queueReady: true, restoringQueue: false, changingSession: false, QUEUE_STORAGE_KEY: 'test-queue',
     queueRestore: {}, queueRestoreStatus: {}, fileInput: {},
     localStorage: { setItem: (key, value) => stored.set(key, value), getItem: key => stored.get(key) || null },
     updateQueueDisplay() {}, playQueueItem(index) { box.played = index; },
@@ -26,44 +26,6 @@ function setup(names, overrides = {}) {
 const file = name => ({ name, size: 123, lastModified: 456, type: 'audio/mp3' });
 const item = name => ({ ...file(name), id: name, isAudio: true, duration: 10, file: null, url: null });
 test('application JavaScript parses', () => new vm.Script(script));
-test('saved snapshot preserves order, selection and handles without media contents or URLs', () => {
-  let disk;
-  const { box, stored } = setup(['queueRecord', 'saveQueue'], {
-    queueDB: { transaction: () => ({ objectStore: () => ({ put(value) { disk = value; } }) }) },
-  });
-  box.mediaQueue = [item('b'), { ...item('a'), file: file('a'), url: 'blob:a', handle: { name: 'a' } }];
-  box.currentQueueIndex = 1;
-  box.saveQueue();
-  const metadata = JSON.parse(stored.get('test-queue'));
-  assert.deepEqual(metadata.items.map(i => i.id), ['b', 'a']);
-  assert.equal(metadata.resumeItemId, 'a');
-  assert(!('file' in disk.items[1])); assert(!('url' in disk.items[1]));
-  assert(!('handle' in metadata.items[1])); assert.equal(disk.items[1].handle.name, 'a');
-  box.mediaQueue = []; box.currentQueueIndex = -1; box.resumeItemId = null; box.saveQueue();
-  assert.equal(disk.items.length, 0);
-});
-test('startup restores metadata and handles without opening files or requesting permission', async () => {
-  const saved = { items: [item('b'), item('a')], resumeItemId: 'a' };
-  const handle = { requestPermission() { throw Error('must wait for click'); } };
-  const db = { transaction: () => ({ objectStore: () => ({ get() {
-    const request = {}; queueMicrotask(() => { request.result = { items: [{ ...item('a'), handle }] }; request.onsuccess(); }); return request;
-  } }) }) };
-  const { box, stored } = setup(['queueRecord', 'loadSavedQueue'], { indexedDB: { open() {
-    const request = {}; queueMicrotask(() => { request.result = db; request.onsuccess(); }); return request;
-  } } });
-  stored.set('test-queue', JSON.stringify(saved));
-  await box.loadSavedQueue();
-  assert.deepEqual(Array.from(box.mediaQueue, i => i.id), ['b', 'a']);
-  assert.equal(box.mediaQueue[1].handle, handle);
-  assert(box.mediaQueue.every(i => !i.url && !i.file));
-  assert.equal(box.resumeItemId, 'a');
-});
-test('metadata-only fallback works when IndexedDB is unavailable', async () => {
-  const { box, stored } = setup(['queueRecord', 'loadSavedQueue']);
-  stored.set('test-queue', JSON.stringify({ items: [item('a')], resumeItemId: 'a' }));
-  await box.loadSavedQueue();
-  assert.equal(box.mediaQueue.length, 1); assert.equal(box.mediaQueue[0].handle, null); assert(box.queueReady);
-});
 test('restore requests all permissions before yielding and retains denied or missing files', async () => {
   const calls = [];
   const { box } = setup(['sameQueueFile', 'attachQueueFile', 'resumeRestoredQueue', 'restoreSavedQueue']);

@@ -38,6 +38,7 @@ function savePlaybackSpeed() {
   } catch (err) {
     console.warn("Could not save playback speed:", err);
   }
+  saveQueue();
 }
 
 const POSITION_STORAGE_KEY = "mediaPlaybackPositions";
@@ -76,6 +77,8 @@ function cancelWaveformJob() {
 }
 
 const queueRestore = document.getElementById("queueRestore");
+const queueRestoreSummary = document.getElementById("queueRestoreSummary");
+const queueRestoreList = document.getElementById("queueRestoreList");
 const restoreQueueButton = document.getElementById("restoreQueueButton");
 const relinkQueueButton = document.getElementById("relinkQueueButton");
 const queueRestoreStatus = document.getElementById("queueRestoreStatus");
@@ -91,39 +94,184 @@ function queueRecord(item) {
   return {
     id: item.id, name: item.name, size: item.size,
     lastModified: item.lastModified, isAudio: item.isAudio,
-    duration: item.duration, handle: item.handle || null,
+    duration: item.duration, position: item.position || null, handle: item.handle || null,
   };
 }
 
-function saveQueue() {
-  if (!queueReady) return;
-  const snapshot = {
-    items: mediaQueue.map(queueRecord),
-    resumeItemId: mediaQueue[currentQueueIndex]?.id || resumeItemId,
-  };
-  // Metadata survives even if handles cannot be stored by this browser.
-  try {
-    localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify({
-      ...snapshot, items: snapshot.items.map(({ handle, ...item }) => item),
-    }));
-  } catch (err) {
-    queueRestore.hidden = false;
-    queueRestoreStatus.textContent = "Queue could not be saved in this browser.";
-  }
+const savedQueues = document.getElementById("savedQueues");
+const savedQueuesSummary = document.getElementById("savedQueuesSummary");
+const savedQueuesList = document.getElementById("savedQueuesList");
+const sessionStatus = document.getElementById("sessionStatus");
+let sessionStore;
+let activeSession = null;
+let savedHandles = new Map();
+let changingSession = false;
+
+function writeSessionHandles(snapshot) {
   if (!queueDB) return;
   try {
     const tx = queueDB.transaction("queue", "readwrite");
-    tx.objectStore("queue").put(snapshot, "current");
+    tx.objectStore("queue").put(snapshot, snapshot.id);
     tx.onerror = () => console.warn("Could not save file access; queue metadata is still saved.");
-  } catch (err) {
-    console.warn("Could not save file access:", err);
+  } catch (err) { console.warn("Could not save file access:", err); }
+}
+
+function saveQueue() {
+  if (!queueReady || !activeSession || sessionStore.activeId !== activeSession.id || (!mediaQueue.length && !activeSession.items?.length)) return;
+  activeSession = {
+    ...activeSession,
+    name: sessionStore.read(activeSession.id)?.name ?? activeSession.name ?? "",
+    items: mediaQueue.map(queueRecord),
+    resumeItemId: mediaQueue[currentQueueIndex]?.id || resumeItemId,
+    speed: currentPlaybackSpeed, updatedAt: Date.now(),
+  };
+  sessionStore.save(activeSession);
+  savedHandles.set(activeSession.id, activeSession);
+  writeSessionHandles(activeSession);
+  if (sessionStore.storageError) sessionStatus.textContent = "Browser storage is unavailable; queues may not survive closing this tab.";
+}
+
+function renderSavedSessions() {
+  if (!sessionStore) return;
+  const records = sessionStore.list().filter(record => record.id !== activeSession?.id);
+  savedQueues.hidden = !records.length;
+  savedQueuesSummary.textContent = `Saved queues (${records.length})`;
+  savedQueuesList.innerHTML = "";
+  for (const record of records) {
+    const row = document.createElement("li");
+    row.className = "saved-session";
+    const label = document.createElement("span");
+    label.className = "saved-session-label";
+    label.textContent = `${record.name || record.items[0]?.name || "Queue"} · ${record.items.length} files · ${new Date(record.updatedAt).toLocaleString()}`;
+    row.appendChild(label);
+    for (const [text, action] of [
+      ["Restore", () => openSavedSession(record.id)],
+      ["Rename", () => renameSavedSession(record.id)],
+      ["Delete", () => deleteSavedSession(record.id)],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button"; button.textContent = text;
+      button.disabled = changingSession;
+      button.onclick = action;
+      row.appendChild(button);
+    }
+    savedQueuesList.appendChild(row);
   }
 }
 
+function resetCurrentQueue() {
+  cancelWaveformJob();
+  currentMediaName = null;
+  currentQueueIndex = -1;
+  for (const player of [videoPlayer, audioPlayer]) {
+    player.pause(); player.removeAttribute("src"); player.load();
+    player.classList.remove("loaded-video");
+  }
+  for (const item of mediaQueue) if (item.url) URL.revokeObjectURL(item.url);
+  mediaQueue = [];
+  currentWaveform = null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  progressCtx.clearRect(0, 0, progressCanvas.width, progressCanvas.height);
+}
+
+function applyQueueSession(record) {
+  const handles = new Map((savedHandles.get(record.id)?.items || record.items || []).map(item => [item.id, item.handle]));
+  mediaQueue = (record.items || []).filter(item => item && typeof item.name === "string" && typeof item.id === "string").map(item => ({
+    ...queueRecord(item), handle: handles.get(item.id) || null, file: null, url: null,
+  }));
+  resumeItemId = record.resumeItemId || null;
+  const speed = Number(record.speed);
+  if (Number.isFinite(speed) && speed >= 0.1 && speed <= 100) currentPlaybackSpeed = speed;
+  speedControl.value = String(currentPlaybackSpeed);
+  activeSession = record;
+}
+
+async function openSavedSession(id) {
+  if (!queueReady || changingSession || restoringQueue) return;
+  const metadata = sessionStore.read(id);
+  if (!metadata) return;
+  // Start file permission requests within this click, before claiming the session.
+  const handleRecord = savedHandles.get(id);
+  const handleMap = new Map((handleRecord?.items || []).map(item => [item.id, item.handle]));
+  const requests = metadata.items.map(item => {
+    const handle = handleMap.get(item.id);
+    try { return handle ? Promise.resolve(handle.requestPermission({ mode: "read" })).catch(() => "denied") : Promise.resolve("denied"); }
+    catch (_) { return Promise.resolve("denied"); }
+  });
+  changingSession = true;
+  saveCurrentPositionNow(); saveQueue();
+  renderSavedSessions();
+  try {
+    const claimed = await sessionStore.activate({ ...metadata, items: metadata.items.map(item => ({ ...item, handle: handleMap.get(item.id) || null })) });
+    resetCurrentQueue();
+    applyQueueSession(claimed);
+    if (claimed.copied) sessionStatus.textContent = "Opened an independent copy of this queue.";
+    else sessionStatus.textContent = "";
+    const items = [...mediaQueue];
+    await Promise.all(items.map(async (item, index) => {
+      if (await requests[index] !== "granted" || !item.handle) return;
+      try { const file = await item.handle.getFile(); if (mediaQueue.includes(item)) attachQueueFile(item, file, item.handle); }
+      catch (_) {} // Retain unavailable files for retry or reselection.
+    }));
+  } finally {
+    changingSession = false;
+    updateQueueDisplay();
+    resumeRestoredQueue();
+  }
+}
+
+async function startNewSession() {
+  if (!queueReady || changingSession || restoringQueue) return;
+  changingSession = true;
+  saveCurrentPositionNow(); saveQueue();
+  try {
+    const record = await sessionStore.activate();
+    resetCurrentQueue(); applyQueueSession(record);
+    sessionStatus.textContent = "New queue. Add files or restore a saved queue.";
+  } finally { changingSession = false; updateQueueDisplay(); }
+}
+
+function renameSavedSession(id) {
+  const record = sessionStore.read(id);
+  if (!record) return;
+  const name = window.prompt("Queue name", record.name || record.items[0]?.name || "Queue");
+  if (name === null) return;
+  sessionStore.save({ ...record, name: name.trim().slice(0, 200) });
+  renderSavedSessions();
+}
+
+async function deleteSavedSession(id) {
+  try {
+    if (!await sessionStore.remove(id)) {
+      sessionStatus.textContent = "This queue is open in another tab. Close it before deleting its saved queue.";
+      return;
+    }
+    savedHandles.delete(id);
+    if (queueDB) queueDB.transaction("queue", "readwrite").objectStore("queue").delete(id);
+    renderSavedSessions();
+  } catch (err) { sessionStatus.textContent = "Could not delete this saved queue."; }
+}
+
+async function refreshSavedHandles() {
+  if (!queueDB) return;
+  try {
+    const records = await new Promise((resolve, reject) => {
+      const request = queueDB.transaction("queue").objectStore("queue").getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    for (const record of records) savedHandles.set(record.id || "legacy", record);
+  } catch (err) { console.warn("Could not refresh saved file access:", err); }
+}
+
 async function loadSavedQueue() {
-  let metadata = null;
-  let stored = null;
-  try { metadata = JSON.parse(localStorage.getItem(QUEUE_STORAGE_KEY)); } catch (_) {}
+  let storage, tabStorage;
+  const unavailable = { getItem: () => null, setItem() { throw new Error("Storage unavailable"); } };
+  try { storage = localStorage; } catch (_) { storage = unavailable; }
+  try { tabStorage = sessionStorage; } catch (_) { tabStorage = unavailable; }
+  sessionStore = new QueueSessions({ storage, tabStorage, locks: navigator.locks, prefix: QUEUE_STORAGE_KEY });
+  let legacy = null;
+  try { legacy = JSON.parse(localStorage.getItem(QUEUE_STORAGE_KEY)); } catch (_) {}
   try {
     queueDB = await new Promise((resolve, reject) => {
       const request = indexedDB.open(QUEUE_STORAGE_KEY, 1);
@@ -133,25 +281,37 @@ async function loadSavedQueue() {
       request.onblocked = () => reject(new Error("Queue storage is busy"));
     });
     queueDB.onversionchange = () => { queueDB.close(); queueDB = null; };
-    stored = await new Promise((resolve, reject) => {
-      const request = queueDB.transaction("queue").objectStore("queue").get("current");
+    const stored = await new Promise((resolve, reject) => {
+      const request = queueDB.transaction("queue").objectStore("queue").getAll();
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
+    for (const record of stored) {
+      if (record.id) savedHandles.set(record.id, record);
+      else { savedHandles.set("legacy", record); legacy ||= record; }
+    }
   } catch (err) { console.warn("Saved file access unavailable:", err); }
-  const snapshot = metadata || stored;
-  if (snapshot && Array.isArray(snapshot.items)) {
-    const handles = new Map((stored?.items || []).map((item) => [item.id, item.handle]));
-    mediaQueue = snapshot.items.filter((item) => item && typeof item.name === "string" && typeof item.id === "string").map((item) => ({
-      ...queueRecord(item), file: null, url: null,
-      handle: handles.get(item.id) || null,
-    }));
-    resumeItemId = snapshot.resumeItemId;
-  }
+  const migrated = sessionStore.migrate(legacy);
+  if (migrated) writeSessionHandles({ ...migrated, items: migrated.items.map(item => ({ ...item, handle: savedHandles.get("legacy")?.items?.find(saved => saved.id === item.id)?.handle || null })) });
+  const previous = sessionStore.tabSession();
+  const record = await sessionStore.activate(previous);
+  if (record.copied && previous) record.items = previous.items.map(item => ({ ...item, handle: savedHandles.get(previous.id)?.items?.find(saved => saved.id === item.id)?.handle || null }));
+  applyQueueSession(record);
   queueReady = true;
   fileInput.disabled = false;
   updateQueueDisplay();
 }
+
+document.getElementById("newQueueButton").addEventListener("click", startNewSession);
+window.addEventListener("storage", async event => {
+  if (!event.key?.startsWith(`${QUEUE_STORAGE_KEY}:session:`)) return;
+  await refreshSavedHandles();
+  renderSavedSessions();
+});
+window.addEventListener("pagehide", () => { saveCurrentPositionNow(); saveQueue(); sessionStore?.release?.(); });
+window.addEventListener("pageshow", event => {
+  if (event.persisted) location.reload(); // Reclaim ownership after returning from the back/forward cache.
+});
 
 function sameQueueFile(item, file) {
   return item.name === file.name && item.size === file.size && item.lastModified === file.lastModified;
@@ -173,7 +333,7 @@ function resumeRestoredQueue() {
 
 // Invoke permission requests directly in the click handler, before any I/O.
 async function restoreSavedQueue() {
-  if (!queueReady || restoringQueue) return;
+  if (!queueReady || restoringQueue || changingSession) return;
   const pending = mediaQueue.filter((item) => !item.url && item.handle);
   if (!pending.length) { chooseQueueFiles(true); return; }
   restoringQueue = true;
@@ -204,7 +364,7 @@ async function restoreSavedQueue() {
 }
 
 async function chooseQueueFiles(relink = false) {
-  if (!queueReady) return;
+  if (!queueReady || changingSession) return;
   relinkingFiles = relink;
   if (!window.showOpenFilePicker || useNativePicker) { fileInput.click(); return; }
   try {
@@ -216,6 +376,7 @@ async function chooseQueueFiles(relink = false) {
     if (err.name !== "AbortError") {
       useNativePicker = true;
       queueRestore.hidden = false;
+      queueRestore.open = true;
       queueRestoreStatus.textContent = "Click again to select files using the standard chooser.";
       console.warn("File picker failed:", err);
     }
@@ -271,6 +432,11 @@ function saveCurrentPositionNow() {
     updatedAt: Date.now(),
   };
   writePositionStore(store);
+  const item = mediaQueue[currentQueueIndex];
+  if (item && item.name === currentMediaName) {
+    item.position = store[currentMediaName];
+    saveQueue();
+  }
 }
 
 function schedulePositionSave() {
@@ -282,7 +448,8 @@ function schedulePositionSave() {
 }
 
 function getSavedPosition(filename) {
-  const saved = readPositionStore()[filename];
+  const item = mediaQueue[currentQueueIndex];
+  const saved = item?.name === filename && item.position ? item.position : readPositionStore()[filename];
   const time = typeof saved === "number" ? saved : saved && saved.time;
   return Number.isFinite(time) && time > 0 ? time : 0;
 }
@@ -552,14 +719,18 @@ drawProgressOverlay();
 // Update queue display
 function updateQueueDisplay() {
   saveQueue();
+  renderSavedSessions();
   const missing = mediaQueue.filter((item) => !item.url).length;
   queueRestore.hidden = missing === 0;
+  queueRestoreSummary.textContent = `Saved files to restore (${missing})`;
+  queueRestoreList.innerHTML = "";
   restoreQueueButton.disabled = restoringQueue;
   relinkQueueButton.disabled = restoringQueue;
   if (missing) queueRestoreStatus.textContent = restoringQueue
     ? "Restoring files…"
     : `${missing} saved file${missing === 1 ? " needs" : "s need"} access. Restore or reselect the original files.`;
-  reverseQueueButton.disabled = mediaQueue.length < 2;
+  reverseQueueButton.disabled = changingSession || mediaQueue.length < 2;
+  document.getElementById("newQueueButton").disabled = changingSession || restoringQueue;
   queueList.innerHTML = "";
 
   if (mediaQueue.length === 0) {
@@ -592,6 +763,7 @@ function updateQueueDisplay() {
 
     const removeBtn = document.createElement("button");
     removeBtn.textContent = "Remove";
+    removeBtn.disabled = changingSession || restoringQueue;
     removeBtn.onclick = () => removeFromQueue(index);
 
     // Drag and drop event handlers
@@ -608,7 +780,7 @@ function updateQueueDisplay() {
 
     li.appendChild(nameWrapper);
     li.appendChild(removeBtn);
-    queueList.appendChild(li);
+    (item.url ? queueList : queueRestoreList).appendChild(li);
   });
 }
 
@@ -725,9 +897,11 @@ function removeFromQueue(index) {
 
 // Play specific queue item
 async function playQueueItem(index) {
+  if (changingSession) return;
   if (index < 0 || index >= mediaQueue.length) return;
   if (!mediaQueue[index].url) {
     queueRestore.hidden = false;
+    queueRestore.open = true;
     queueRestoreStatus.textContent = "Use Restore queue or reselect this file to play it.";
     return;
   }
@@ -1014,10 +1188,16 @@ function shouldUseAudioPlayer(file) {
   return audioFallbackExtensions.has(getFileExtension(file.name));
 }
 
-function addFilesToQueue(files, sourceLabel, handles = [], relinkOnly = false) {
-  if (!queueReady) return;
+async function addFilesToQueue(files, sourceLabel, handles = [], relinkOnly = false) {
+  if (!queueReady || changingSession) return;
   const mediaFiles = files.filter(isSupportedMediaFile);
   if (mediaFiles.length === 0) return;
+  // Adding a fresh batch must not merge it into an unrestored queue.
+  // Reselect files explicitly reconnects the current saved session instead.
+  if (!relinkOnly && mediaQueue.length && mediaQueue.every(item => !item.url)) {
+    await startNewSession();
+    sessionStatus.textContent = "Previous queue saved separately. Started a new queue.";
+  }
 
   // Add files to queue
   mediaFiles.forEach((file) => {
@@ -1086,7 +1266,7 @@ reverseQueueButton.addEventListener("click", function () {
 });
 
 queueContainer.addEventListener("click", function (e) {
-  if (e.target.closest(".queue-restore")) return;
+  if (e.target.closest(".queue-restore, .saved-queues")) return;
   if (e.target.closest(".queue-actions")) return;
   if (e.target.closest(".queue-item")) return;
   if (e.target.closest(".queue-controls")) return;
@@ -1152,7 +1332,7 @@ canvas.addEventListener("click", function (e) {
 // Keyboard shortcuts
 window.addEventListener("keydown", function (e) {
   const tag = document.activeElement.tagName.toLowerCase();
-  if (tag === "input") return;
+  if (["input", "textarea", "select", "button", "summary"].includes(tag) || document.activeElement.isContentEditable) return;
 
   const player = videoPlayer.hidden ? audioPlayer : videoPlayer;
 
