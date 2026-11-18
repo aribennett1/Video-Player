@@ -189,6 +189,21 @@ video.loaded-video {
   color: #4a9eff;
 }
 
+.queue-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  margin-left: 0.15em;
+  border-radius: 50%;
+  background: #111;
+  color: #4a9eff;
+  font-size: 0.75em;
+  line-height: 1;
+  vertical-align: middle;
+}
+
 .queue-actions {
   display: flex;
   align-items: center;

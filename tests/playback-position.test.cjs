@@ -97,6 +97,7 @@ test('unrestored files collapse separately while playable files stay visible and
     { id: 'c', name: 'saved c.mp3', url: null },
   ];
   vm.runInContext('mediaQueue = entries; currentQueueIndex = 1; updateQueueDisplay();', session.box);
+  assert.equal(session.element('queueCount').textContent, 3);
   const details = session.element('queueRestore');
   const missing = session.element('queueRestoreList');
   const available = session.element('queueList');

@@ -9,6 +9,7 @@ const progressCanvas = document.getElementById("progressOverlay");
 const progressCtx = progressCanvas.getContext("2d");
 const queueContainer = document.getElementById("queueContainer");
 const queueList = document.getElementById("queueList");
+const queueCount = document.getElementById("queueCount");
 const reverseQueueButton = document.getElementById("reverseQueueButton");
 
 
@@ -720,6 +721,8 @@ drawProgressOverlay();
 function updateQueueDisplay() {
   saveQueue();
   renderSavedSessions();
+  queueCount.textContent = mediaQueue.length;
+  queueCount.setAttribute("aria-label", `${mediaQueue.length} file${mediaQueue.length === 1 ? "" : "s"} in queue`);
   const missing = mediaQueue.filter((item) => !item.url).length;
   queueRestore.hidden = missing === 0;
   queueRestoreSummary.textContent = `Saved files to restore (${missing})`;
