@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Advanced Media Player</title>
+  <rect width="64" height="64" rx="14" fill="#111"/>
+  <rect x="7" y="7" width="50" height="50" rx="11" fill="#000" stroke="#555" stroke-width="2"/>
+  <path d="M25 19v26l22-13z" fill="#4a9eff"/>
+  <circle cx="49" cy="15" r="4" fill="#4a9eff"/>
+</svg>

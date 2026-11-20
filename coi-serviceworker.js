@@ -8,10 +8,11 @@ const coiTs = () => `[${new Date().toISOString()}]`;
 if (typeof window === "undefined") {
   // ---- Running as a Service Worker ----
   const CACHE_PREFIX = `media-player:${self.registration.scope}:`;
-  const CACHE_NAME = `${CACHE_PREFIX}v3`;
+  const CACHE_NAME = `${CACHE_PREFIX}v4`;
   const assetURL = (path) => new URL(path, self.registration.scope).href;
   const ASSETS = [
     "index.html",
+    "favicon.svg",
     "styles.css",
     "position-store.js",
     "app.js",
